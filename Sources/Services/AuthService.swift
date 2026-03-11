@@ -1,7 +1,7 @@
 import Foundation
 
-/// 登录状态与接口。true = 走真实后端 API
-private let useRealAuthAPI = true
+/// 登录状态与接口。设为 true 时走真实 API（需配置 APIConfig.baseURL 并实现后端）。
+private let useRealAuthAPI = false
 
 /// 登录状态与接口；useRealAuthAPI 为 false 时为模拟实现。
 final class AuthService: ObservableObject {
@@ -27,10 +27,10 @@ final class AuthService: ObservableObject {
         guard !password.isEmpty else { completion(.failure(AuthError.invalidPassword)); return }
 
         if useRealAuthAPI {
-            APIClient.shared.requestUnified(path: "/api/v1/auth/login", method: "POST", body: LoginPasswordRequest(phone: trimmed, password: password)) { [weak self] (result: Result<AuthData, Error>) in
+            APIClient.shared.request(path: "/auth/login", method: "POST", body: LoginPasswordRequest(phone: trimmed, password: password)) { [weak self] (result: Result<AuthResponse, Error>) in
                 switch result {
                 case .success(let res):
-                    self?.saveSession(phone: trimmed, token: res.token)
+                    self?.saveSession(phone: res.phone ?? trimmed, token: res.token)
                     APIClient.shared.authToken = res.token
                     completion(.success(()))
                 case .failure(let e):
@@ -54,10 +54,10 @@ final class AuthService: ObservableObject {
         guard codeTrimmed.count >= 4, codeTrimmed.allSatisfy(\.isNumber) else { completion(.failure(AuthError.invalidCode)); return }
 
         if useRealAuthAPI {
-            APIClient.shared.requestUnified(path: "/api/v1/auth/login/sms", method: "POST", body: LoginSMSRequestAPI(phone: trimmed, smsCode: codeTrimmed)) { [weak self] (result: Result<AuthData, Error>) in
+            APIClient.shared.request(path: "/auth/login/sms", method: "POST", body: LoginSMSRequest(phone: trimmed, code: codeTrimmed)) { [weak self] (result: Result<AuthResponse, Error>) in
                 switch result {
                 case .success(let res):
-                    self?.saveSession(phone: trimmed, token: res.token)
+                    self?.saveSession(phone: res.phone ?? trimmed, token: res.token)
                     APIClient.shared.authToken = res.token
                     completion(.success(()))
                 case .failure(let e):
@@ -79,7 +79,7 @@ final class AuthService: ObservableObject {
         guard trimmed.count >= 11 else { completion(.failure(AuthError.invalidPhone)); return }
 
         if useRealAuthAPI {
-            APIClient.shared.requestVoidUnified(path: "/api/v1/auth/sms/send", method: "POST", body: SendSMSRequest(phone: trimmed), completion: completion)
+            APIClient.shared.requestVoid(path: "/auth/sms/send", method: "POST", body: SendSMSRequest(phone: trimmed), completion: completion)
             return
         }
 
@@ -95,10 +95,10 @@ final class AuthService: ObservableObject {
         guard password.count >= 6 else { completion(.failure(AuthError.passwordTooShort)); return }
 
         if useRealAuthAPI {
-            APIClient.shared.requestUnified(path: "/api/v1/auth/register", method: "POST", body: RegisterRequestAPI(phone: trimmed, smsCode: codeTrimmed, password: password)) { [weak self] (result: Result<AuthData, Error>) in
+            APIClient.shared.request(path: "/auth/register", method: "POST", body: RegisterRequest(phone: trimmed, code: codeTrimmed, password: password)) { [weak self] (result: Result<AuthResponse, Error>) in
                 switch result {
                 case .success(let res):
-                    self?.saveSession(phone: trimmed, token: res.token)
+                    self?.saveSession(phone: res.phone ?? trimmed, token: res.token)
                     APIClient.shared.authToken = res.token
                     completion(.success(()))
                 case .failure(let e):
@@ -123,7 +123,7 @@ final class AuthService: ObservableObject {
         guard newPassword.count >= 6 else { completion(.failure(AuthError.passwordTooShort)); return }
 
         if useRealAuthAPI {
-            APIClient.shared.requestVoidUnified(path: "/api/v1/auth/password/reset", method: "POST", body: ResetPasswordRequestAPI(phone: trimmed, smsCode: codeTrimmed, newPassword: newPassword), completion: completion)
+            APIClient.shared.requestVoid(path: "/auth/password/reset", method: "POST", body: ResetPasswordRequest(phone: trimmed, code: codeTrimmed, newPassword: newPassword), completion: completion)
             return
         }
 

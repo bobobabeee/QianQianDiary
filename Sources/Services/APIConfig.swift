@@ -3,11 +3,11 @@ import Foundation
 /// API 基础配置，接入真实后端时修改此处。
 enum APIConfig {
     /// 后端 base URL，末尾不要带 /
-    /// 模拟器访问本机: http://localhost:5001
-    /// 真机访问本机: http://你的电脑IP:5001（需同一 WiFi）
+    /// 开发: "https://your-api.example.com" 或 "http://localhost:8080"
     static var baseURL: String {
         #if DEBUG
-        return ProcessInfo.processInfo.environment["API_BASE_URL"] ?? "http://localhost:5001"
+        // 把这里改成完整的 IP + 端口
+        return "http://172.20.10.9:5000"
         #else
         return "https://your-api.example.com"
         #endif

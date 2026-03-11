@@ -1,0 +1,23 @@
+--indent 4
+--indentcase false
+--trimwhitespace always
+--maxwidth 120
+--wraparguments before-first
+--wrapparameters before-first
+--wrapcollections before-first
+--commas always
+--semicolons inline
+--ranges spaced
+--stripunusedargs always
+--elseposition same-line
+--guardelse same-line
+--importgrouping testable-bottom
+--self remove
+--header strip
+--decimalgrouping none
+--binarygrouping none
+--octalgrouping none
+--hexgrouping none
+--hexliteralcase uppercase
+--exponentcase lowercase
+
