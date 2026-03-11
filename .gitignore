@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+
+# Python / Backend
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.log
+.pytest_cache/
+
+# Xcode
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+
+# IDE
+.idea/
+.vscode/

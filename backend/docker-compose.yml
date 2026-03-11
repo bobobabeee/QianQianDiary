@@ -1,0 +1,42 @@
+# 本地 Docker 环境验证：应用 + MySQL
+version: "3.8"
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: qianqian_diary
+      MYSQL_USER: qianqian
+      MYSQL_PASSWORD: qianqian123
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    image: qianqian-backend:latest
+    ports:
+      - "5001:5001"
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: qianqian
+      MYSQL_PASSWORD: qianqian123
+      MYSQL_DATABASE: qianqian_diary
+      SECRET_KEY: dev-secret-for-docker
+      JWT_SECRET_KEY: dev-jwt-secret
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
