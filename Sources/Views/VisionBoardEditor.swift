@@ -265,23 +265,27 @@ private struct VisionBoardEditorImageUploadSection: View {
                     VisionBoardEditorImagePreview(
                         imageSource: imageSource,
                         isLoading: isLoading,
-                        onReplace: { },
+                        selectedPhotoItem: $selectedPhotoItem,
                         onRemove: onRemove,
                         isDisabled: isDisabled
                     )
                 } else {
-                    VisionBoardEditorImagePlaceholder(isDisabled: isDisabled)
+                    VisionBoardEditorImagePlaceholder(isDisabled: isDisabled, isLoading: isLoading)
+                        .overlay {
+                            PhotosPicker(
+                                selection: $selectedPhotoItem,
+                                matching: .images,
+                                photoLibrary: .shared()
+                            ) {
+                                Color.clear
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .contentShape(Rectangle())
+                            }
+                            .disabled(isDisabled || isLoading)
+                            .buttonStyle(.plain)
+                            .allowsHitTesting(!isDisabled && !isLoading)
+                        }
                 }
-
-                PhotosPicker(
-                    selection: $selectedPhotoItem,
-                    matching: .images,
-                    photoLibrary: .shared()
-                ) {
-                    Color.clear
-                }
-                .disabled(isDisabled || isLoading)
-                .buttonStyle(.plain)
             }
             .aspectRatio(1.0, contentMode: .fit)
 
@@ -314,7 +318,7 @@ private struct VisionBoardEditorImageUploadSection: View {
 private struct VisionBoardEditorImagePreview: View {
     let imageSource: VisionBoardEditorViewModel.VisionBoardEditorImageSource
     let isLoading: Bool
-    let onReplace: () -> Void
+    @Binding var selectedPhotoItem: PhotosPickerItem?
     let onRemove: () -> Void
     let isDisabled: Bool
 
@@ -334,13 +338,24 @@ private struct VisionBoardEditorImagePreview: View {
                 Spacer(minLength: 0)
 
                 HStack(spacing: 8) {
-                    VisionBoardEditorSmallButton(
-                        title: "更换",
-                        icon: "Edit2",
-                        variant: ButtonVariant.secondary,
-                        isDisabled: isDisabled || isLoading,
-                        onTap: onReplace
-                    )
+                    PhotosPicker(
+                        selection: $selectedPhotoItem,
+                        matching: .images,
+                        photoLibrary: .shared()
+                    ) {
+                        HStack(spacing: 6) {
+                            SafeIcon("Edit2", size: 16, color: AppTheme.colors.onSecondary)
+                            Text("更换")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(AppTheme.colors.onSecondary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(AppTheme.colors.secondary)
+                        .cornerRadius(AppTheme.radius.small)
+                    }
+                    .disabled(isDisabled || isLoading)
+                    .buttonStyle(.plain)
 
                     VisionBoardEditorSmallButton(
                         title: "删除",
@@ -388,6 +403,7 @@ private struct VisionBoardEditorImagePreview: View {
 
 private struct VisionBoardEditorImagePlaceholder: View {
     let isDisabled: Bool
+    var isLoading: Bool = false
 
     var body: some View {
         VStack(spacing: 8) {

@@ -6,7 +6,8 @@ enum APIConfig {
     /// 开发: "https://your-api.example.com" 或 "http://localhost:8080"
     static var baseURL: String {
         #if DEBUG
-        return ProcessInfo.processInfo.environment["API_BASE_URL"] ?? "https://your-api.example.com"
+        // 把这里改成完整的 IP + 端口
+        return "http://172.20.10.9:5000"
         #else
         return "https://your-api.example.com"
         #endif

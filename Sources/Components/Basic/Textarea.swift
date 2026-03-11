@@ -1,4 +1,57 @@
 import SwiftUI
+import UIKit
+
+// MARK: - UITextView wrapper for full keyboard support (including Chinese pinyin)
+
+private struct ChineseFriendlyTextView: UIViewRepresentable {
+    @Binding var text: String
+    var fontSize: CGFloat
+    var textColor: Color
+    var isEnabled: Bool
+    var minHeight: CGFloat
+    var onFocusChange: (Bool) -> Void
+
+    func makeUIView(context: Context) -> UITextView {
+        let tv = UITextView()
+        tv.delegate = context.coordinator
+        tv.font = .systemFont(ofSize: fontSize)
+        tv.textColor = UIColor(textColor)
+        tv.backgroundColor = .clear
+        tv.isScrollEnabled = true
+        tv.textContainerInset = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
+        tv.keyboardType = .default
+        tv.returnKeyType = .default
+        tv.autocorrectionType = .default
+        tv.spellCheckingType = .default
+        tv.textContentType = nil
+        return tv
+    }
+
+    func updateUIView(_ uiView: UITextView, context: Context) {
+        if uiView.text != text { uiView.text = text }
+        uiView.font = .systemFont(ofSize: fontSize)
+        uiView.textColor = UIColor(textColor)
+        uiView.isUserInteractionEnabled = isEnabled
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject, UITextViewDelegate {
+        var parent: ChineseFriendlyTextView
+        init(_ parent: ChineseFriendlyTextView) { self.parent = parent }
+        func textViewDidChange(_ textView: UITextView) {
+            parent.text = textView.text ?? ""
+        }
+        func textViewDidBeginEditing(_ textView: UITextView) {
+            parent.onFocusChange(true)
+        }
+        func textViewDidEndEditing(_ textView: UITextView) {
+            parent.onFocusChange(false)
+        }
+    }
+}
 
 // MARK: - Textarea
 
@@ -14,7 +67,7 @@ struct AppTextarea: View {
     var cornerRadius: CGFloat = 6
     var textColor: Color = .primary
 
-    @FocusState private var isFocused: Bool
+    @State private var isFocused: Bool = false
 
     init(text: Binding<String>, placeholder: String = "") {
         _text = text
@@ -32,15 +85,15 @@ struct AppTextarea: View {
                     .allowsHitTesting(false)
             }
 
-            TextEditor(text: $text)
-                .font(.system(size: fontSize))
-                .foregroundColor(isEnabled ? textColor : textColor.opacity(0.5))
-                .padding(.horizontal, 4)
-                .padding(.vertical, 0)
-                .frame(minHeight: minHeight)
-                .scrollContentBackground(.hidden)
-                .background(Color.clear)
-                .focused($isFocused)
+            ChineseFriendlyTextView(
+                text: $text,
+                fontSize: fontSize,
+                textColor: isEnabled ? textColor : textColor.opacity(0.5),
+                isEnabled: isEnabled,
+                minHeight: minHeight,
+                onFocusChange: { isFocused = $0 }
+            )
+            .frame(minHeight: minHeight)
         }
         .background(Color.clear)
         .cornerRadius(cornerRadius)
