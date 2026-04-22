@@ -33,6 +33,9 @@ struct SuccessDiaryStats: View {
             MobileBottomNav(activeDestination: AppRouter.Destination.successDiaryStats)
         }
         .navigationBarBackButtonHidden(true)
+        .onAppear {
+            viewModel.loadFromAPI { viewModel.objectWillChange.send() }
+        }
     }
 }
 

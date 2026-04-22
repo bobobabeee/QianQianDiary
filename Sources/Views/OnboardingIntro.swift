@@ -111,7 +111,7 @@ private struct OnboardingIntroHeroView: View {
                 .aspectRatio(3.0 / 4.0, contentMode: .fit)
                 .cornerRadius(18)
                 .shadow(color: AppTheme.shadow.card.color, radius: AppTheme.shadow.card.radius, x: 0, y: 4)
-                .accessibilityLabel(Text("钱钱与成功日记"))
+                .accessibilityLabel(Text("Poppy 与成功日记"))
         }
         .frame(maxWidth: 320)
         .opacity(showImage ? 1 : 0)
@@ -146,7 +146,7 @@ private struct OnboardingIntroHeroView: View {
     }
 
     private var hintBlock: some View {
-        Text("与拉布拉多\"钱钱\"一起开启成长之旅")
+        Text("与拉布拉多 Poppy 一起开启成长之旅")
             .font(.system(size: 12))
             .foregroundColor(AppTheme.colors.onMuted)
             .multilineTextAlignment(.center)

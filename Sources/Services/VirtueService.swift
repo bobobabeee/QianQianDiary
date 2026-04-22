@@ -3,9 +3,14 @@ import Foundation
 final class VirtueService {
     static let shared = VirtueService()
 
+    /// 同日同类型多次记录时拼接心得，时间轴按此拆成多条展示
+    static let virtueReflectionEntrySeparator = "\n\n────────\n"
+
     private var definitionsByType: [VirtueTypeData: VirtueDefinitionData]
     private var logsById: [String: VirtuePracticeLogData]
     private var cachedUserId: String?
+    private var apiDefinitionsCache: [VirtueDefinitionData] = []
+    private var apiLogsCache: [VirtuePracticeLogData] = []
 
     private init() {
         let definitions: [VirtueDefinitionData] = [
@@ -82,17 +87,71 @@ final class VirtueService {
             if cachedUserId != nil {
                 logsById = [:]
                 cachedUserId = nil
+                apiDefinitionsCache = []
+                apiLogsCache = []
             }
             return
         }
-        if cachedUserId == uid { return }
+        if cachedUserId == uid, !APIConfig.useRealAPI { return }
         cachedUserId = uid
+        if APIConfig.useRealAPI { return }
         if let list = UserDataPersistence.shared.loadVirtueLogs(userId: uid), !list.isEmpty {
             logsById = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
         } else {
             logsById = [:]
             seedSampleLogIfNewUser()
         }
+    }
+
+    /// 登出或切换账号时清空所有缓存，确保不泄露上一账号数据
+    func clearAllCaches() {
+        cachedUserId = nil
+        logsById = [:]
+        apiDefinitionsCache = []
+        apiLogsCache = []
+    }
+
+    func loadFromAPI(completion: @escaping () -> Void) {
+        guard APIConfig.useRealAPI else {
+            ensureLoaded()
+            completion()
+            return
+        }
+        if let uid = currentUserId() {
+            cachedUserId = uid
+            if apiLogsCache.isEmpty, let saved = UserDataPersistence.shared.loadVirtueLogs(userId: uid), !saved.isEmpty {
+                apiLogsCache = saved
+            }
+        }
+        let group = DispatchGroup()
+        group.enter()
+        VirtueAPI.getDefinitions { [weak self] result in
+            if case .success(let list) = result {
+                self?.apiDefinitionsCache = list
+            } else {
+                self?.apiDefinitionsCache = []
+            }
+            group.leave()
+        }
+        group.enter()
+        VirtueAPI.getLogs(pageSize: 200) { [weak self] result in
+            if case .success(let data) = result {
+                self?.apiLogsCache = data.items
+                self?.persistApiVirtueLogsIfNeeded()
+            }
+            // 失败时保留磁盘恢复的 apiLogsCache，避免离线或网络错误时列表被清空
+            group.leave()
+        }
+        group.notify(queue: .main) { [weak self] in
+            self?.persistApiVirtueLogsIfNeeded()
+            completion()
+        }
+    }
+
+    private func persistApiVirtueLogsIfNeeded() {
+        guard APIConfig.useRealAPI else { return }
+        guard let uid = currentUserId() ?? cachedUserId else { return }
+        UserDataPersistence.shared.saveVirtueLogs(apiLogsCache, userId: uid)
     }
 
     /// 新用户首次进入时写入一条示例美德践行记录，并立即持久化
@@ -117,12 +176,18 @@ final class VirtueService {
     }
 
     func getVirtueDefinition(type: VirtueTypeData) -> VirtueDefinitionData {
+        if APIConfig.useRealAPI {
+            if let found = apiDefinitionsCache.first(where: { $0.type == type }) { return found }
+        }
         if let found = definitionsByType[type] { return found }
         return defaultVirtueDefinition(type: type)
     }
 
     func getAllVirtueDefinitions() -> [VirtueDefinitionData] {
-        VirtueTypeData.allCases.map { getVirtueDefinition(type: $0) }
+        if APIConfig.useRealAPI, !apiDefinitionsCache.isEmpty {
+            return apiDefinitionsCache
+        }
+        return VirtueTypeData.allCases.map { getVirtueDefinition(type: $0) }
     }
 
     func getTodayVirtueDefinition(date: Date = Date(), calendar: Calendar = .current) -> VirtueDefinitionData {
@@ -133,14 +198,22 @@ final class VirtueService {
     }
 
     func getVirtuePracticeLog(id: String) -> VirtuePracticeLogData {
+        if APIConfig.useRealAPI {
+            if let found = apiLogsCache.first(where: { $0.id == id }) { return found }
+        }
         ensureLoaded()
         if let found = logsById[id] { return found }
         return defaultVirtuePracticeLog(id: id, date: currentDateString(), virtueType: getTodayVirtueDefinition().type)
     }
 
     func getVirtuePracticeLogs(date: String? = nil, virtueType: VirtueTypeData? = nil) -> [VirtuePracticeLogData] {
-        ensureLoaded()
-        let all = Array(logsById.values)
+        let all: [VirtuePracticeLogData]
+        if APIConfig.useRealAPI {
+            all = apiLogsCache
+        } else {
+            ensureLoaded()
+            all = Array(logsById.values)
+        }
         let filtered = all.filter { log in
             if let date, log.date != date { return false }
             if let virtueType, log.virtueType != virtueType { return false }
@@ -153,25 +226,70 @@ final class VirtueService {
         return [defaultVirtuePracticeLog(id: "log-fallback-\(fallbackDate)-\(fallbackType.rawValue)", date: fallbackDate, virtueType: fallbackType)]
     }
 
-    func upsertVirtuePracticeLog(_ log: VirtuePracticeLogData) {
+    func upsertVirtuePracticeLog(_ log: VirtuePracticeLogData, completion: ((Result<VirtuePracticeLogData, Error>) -> Void)? = nil) {
+        if APIConfig.useRealAPI {
+            print("[VirtueService] POST /api/virtue/logs date=\(log.date) type=\(log.virtueType.rawValue) completed=\(log.isCompleted)")
+            VirtueAPI.upsertLog(log: log) { [weak self] result in
+                switch result {
+                case .success(let updated):
+                    print("[VirtueService] ✅ 美德记录保存成功 id=\(updated.id)")
+                    self?.apiLogsCache.removeAll { $0.id == updated.id }
+                    self?.apiLogsCache.append(updated)
+                    self?.persistApiVirtueLogsIfNeeded()
+                    DispatchQueue.main.async { completion?(.success(updated)) }
+                case .failure(let error):
+                    print("[VirtueService] ❌ 美德记录保存失败: \(error)")
+                    DispatchQueue.main.async { completion?(.failure(error)) }
+                }
+            }
+            return
+        }
         ensureLoaded()
         let normalized = normalizeVirtuePracticeLog(log)
         logsById[normalized.id] = normalized
         saveToPersistence()
+        completion?(.success(normalized))
     }
 
-    func setVirtueCompleted(date: String, virtueType: VirtueTypeData, isCompleted: Bool, reflection: String = "") -> VirtuePracticeLogData {
+    func setVirtueCompleted(date: String, virtueType: VirtueTypeData, isCompleted: Bool, reflection: String = "", completion: ((Result<VirtuePracticeLogData, Error>) -> Void)? = nil) -> VirtuePracticeLogData {
         let existing = getVirtuePracticeLogs(date: date, virtueType: virtueType).first
         let id = existing?.id ?? "log-\(date)-\(virtueType.rawValue)"
+        let mergedReflection = mergeVirtueReflection(
+            existingReflection: existing?.reflection,
+            newReflection: reflection
+        )
         let updated = VirtuePracticeLogData(
             id: id,
             date: date,
             virtueType: virtueType,
             isCompleted: isCompleted,
-            reflection: reflection
+            reflection: mergedReflection
         )
-        upsertVirtuePracticeLog(updated)
+        upsertVirtuePracticeLog(updated, completion: completion)
         return updated
+    }
+
+    /// 避免同日同类型第二次保存时用空/片段覆盖整条；与编辑器预填配合保留历史心得
+    private func mergeVirtueReflection(existingReflection: String?, newReflection: String) -> String {
+        let trimmedNew = newReflection.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prev = (existingReflection ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if trimmedNew.isEmpty {
+            return prev
+        }
+        if prev.isEmpty {
+            return newReflection
+        }
+        if prev == trimmedNew || newReflection == (existingReflection ?? "") {
+            return newReflection
+        }
+        if newReflection.hasPrefix(prev) || trimmedNew.hasPrefix(prev) {
+            return newReflection
+        }
+        if prev.contains(trimmedNew) {
+            return existingReflection ?? newReflection
+        }
+        return prev + Self.virtueReflectionEntrySeparator + trimmedNew
     }
 
     private func defaultVirtueDefinition(type: VirtueTypeData) -> VirtueDefinitionData {

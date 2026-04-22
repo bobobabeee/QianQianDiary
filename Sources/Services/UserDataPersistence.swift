@@ -19,10 +19,14 @@ final class UserDataPersistence {
 
     private init() {}
 
-    /// 用于目录名的用户标识（手机号仅保留数字，避免非法字符）
+    /// 用于目录名的用户标识：优先用手机号数字；否则用用户名等的安全子串，避免纯字母用户都落到同一 `unknown` 目录
     func sanitizedUserId(_ phone: String) -> String {
-        let digits = phone.filter(\.isNumber)
-        return digits.isEmpty ? "unknown" : digits
+        let trimmed = phone.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "unknown" }
+        let digits = trimmed.filter(\.isNumber)
+        if !digits.isEmpty { return digits }
+        let safe = String(trimmed.map { ($0.isLetter || $0.isNumber) ? $0 : "_" }.prefix(80))
+        return safe.isEmpty ? "unknown" : safe
     }
 
     private func userDirectory(userId: String) -> URL? {

@@ -48,7 +48,10 @@ final class VisionBoardMainViewModel: ObservableObject {
     }
 
     func load() {
-        visions = service.getItems(category: nil)
+        service.loadFromAPI { [weak self] in
+            self?.visions = self?.service.getItems(category: nil) ?? []
+            print("[VisionBoardMainViewModel] 愿景数据已刷新，共 \(self?.visions.count ?? 0) 条")
+        }
     }
 
     func selectFilter(_ filter: VisionBoardMainCategoryFilter) {
@@ -64,9 +67,10 @@ final class VisionBoardMainViewModel: ObservableObject {
             pendingDeleteVisionId = nil
             return
         }
-        service.deleteItem(id: id)
-        pendingDeleteVisionId = nil
-        load()
+        service.deleteItem(id: id) { [weak self] _ in
+            self?.pendingDeleteVisionId = nil
+            self?.load()
+        }
     }
 
     func cancelDelete() {

@@ -22,6 +22,29 @@ final class HomeViewModel: ObservableObject {
         self.calendar = calendar
     }
 
+    private var syncWorkItem: DispatchWorkItem?
+
+    /// 合并 `onAppear` 与进入前台触发的同步，避免短时间内重复请求
+    func requestSyncFromAPI(completion: @escaping () -> Void) {
+        syncWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.loadFromAPI(completion: completion)
+        }
+        syncWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    func loadFromAPI(completion: @escaping () -> Void) {
+        let group = DispatchGroup()
+        group.enter()
+        diaryService.loadFromAPI { group.leave() }
+        group.enter()
+        virtueService.loadFromAPI { group.leave() }
+        group.enter()
+        visionService.loadFromAPI { group.leave() }
+        group.notify(queue: .main) { completion() }
+    }
+
     var todayText: String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
@@ -119,11 +142,34 @@ final class HomeViewModel: ObservableObject {
         return out.string(from: Date())
     }
 
-    var visionPreviewItems: [VisionItemData] {
-        let all = visionService.getItems(category: nil)
-        if all.isEmpty { return [] }
-        return Array(all.prefix(4))
+    /// 首页愿景板固定 2×2 共四格：有数据则填前 N 格，其余用占位标题（与产品设计一致）。
+    var visionBoardGridCells: [HomeVisionBoardGridCell] {
+        let items = visionService.getItems(category: nil)
+        return (0..<4).map { index in
+            if index < items.count {
+                let it = items[index]
+                return HomeVisionBoardGridCell(
+                    id: it.id,
+                    title: it.title,
+                    imageUrl: it.imageUrl,
+                    visionItemId: it.id
+                )
+            }
+            return HomeVisionBoardGridCell(
+                id: "vision-slot-\(index)",
+                title: Self.defaultVisionSlotTitles[index],
+                imageUrl: "",
+                visionItemId: nil
+            )
+        }
     }
+
+    private static let defaultVisionSlotTitles = [
+        "成为更好的自己",
+        "坚持阅读与记录",
+        "规律运动",
+        "珍惜身边人"
+    ]
 
     func diaryCategoryLabel(_ category: DiaryCategoryData) -> String {
         diaryService.getCategoryLabel(category)
@@ -190,4 +236,12 @@ final class HomeViewModel: ObservableObject {
 struct HomePageCategoryStyle {
     let background: Color
     let foreground: Color
+}
+
+/// 首页「我的愿景板」单格：有 `visionItemId` 时可进编辑；无则引导新建。
+struct HomeVisionBoardGridCell: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let imageUrl: String
+    let visionItemId: String?
 }

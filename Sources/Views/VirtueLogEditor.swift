@@ -29,8 +29,29 @@ struct VirtueLogEditor: View {
         }
         .background(AppTheme.colors.background)
         .navigationBarBackButtonHidden(true)
+        .onAppear {
+            viewModel.refreshFromService()
+        }
         .onChange(of: viewModel.reflection) { _ in
             viewModel.enforceReflectionLimit()
+        }
+        .alert("保存失败", isPresented: Binding(
+            get: { viewModel.saveError != nil },
+            set: { if !$0 { viewModel.saveError = nil } }
+        )) {
+            Button("确定", role: .cancel) { viewModel.saveError = nil }
+        } message: {
+            Text(viewModel.saveError ?? "")
+        }
+        .allowsHitTesting(!viewModel.isSaving)
+        .overlay {
+            if viewModel.isSaving {
+                Color.black.opacity(0.15).ignoresSafeArea()
+                ProgressView("保存中…")
+                    .padding(24)
+                    .background(AppTheme.colors.surface)
+                    .cornerRadius(12)
+            }
         }
     }
 
@@ -43,8 +64,9 @@ struct VirtueLogEditor: View {
     }
 
     private func handleSave() {
-        viewModel.save()
-        router.navigate(to: AppRouter.Destination.virtueGrowthStats, style: AppRouter.NavigationStyle.push)
+        viewModel.save {
+            router.navigate(to: AppRouter.Destination.virtueGrowthStats, style: AppRouter.NavigationStyle.push)
+        }
     }
 }
 

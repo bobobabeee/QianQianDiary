@@ -17,7 +17,7 @@ final class AppRouter: ObservableObject {
         case profile
         case register
         case settings
-        case successDiaryEditor
+        case successDiaryEditor(entry: SuccessDiaryEntryData? = nil, prefillDate: String? = nil)
         case successDiaryStats
         case virtueGrowthStats
         case virtueLogEditor
@@ -89,8 +89,8 @@ final class AppRouter: ObservableObject {
         case AppRouter.Destination.settings:
             SettingsView()
 
-        case AppRouter.Destination.successDiaryEditor:
-            SuccessDiaryEditor()
+        case AppRouter.Destination.successDiaryEditor(let entry, let prefillDate):
+            SuccessDiaryEditor(entry: entry, prefillDate: prefillDate)
 
         case AppRouter.Destination.successDiaryStats:
             SuccessDiaryStats()

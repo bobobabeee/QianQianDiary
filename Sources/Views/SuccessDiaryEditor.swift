@@ -2,7 +2,11 @@ import SwiftUI
 
 struct SuccessDiaryEditor: View {
     @EnvironmentObject var router: AppRouter
-    @StateObject private var viewModel = SuccessDiaryEditorViewModel()
+    @StateObject private var viewModel: SuccessDiaryEditorViewModel
+
+    init(entry: SuccessDiaryEntryData? = nil, prefillDate: String? = nil) {
+        _viewModel = StateObject(wrappedValue: SuccessDiaryEditorViewModel(entry: entry, prefillDate: prefillDate))
+    }
 
     @State private var isCategoryModalPresented: Bool = false
     @State private var isDateModalPresented: Bool = false
@@ -97,7 +101,7 @@ private struct SuccessDiaryEditorPuppyHero: View {
             .resizable()
             .aspectRatio(contentMode: .fit)
             .frame(maxWidth: 120, maxHeight: 96)
-            .accessibilityLabel(Text("钱钱与你一起记录"))
+            .accessibilityLabel(Text("Poppy 与你一起记录"))
     }
 }
 

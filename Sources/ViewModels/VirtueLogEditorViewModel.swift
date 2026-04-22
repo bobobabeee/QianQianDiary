@@ -7,6 +7,8 @@ final class VirtueLogEditorViewModel: ObservableObject {
     @Published var reflection: String = ""
     @Published var selectedVirtueType: VirtueTypeData = VirtueTypeData.friendly
     @Published private(set) var dateString: String = ""
+    @Published var isSaving: Bool = false
+    @Published var saveError: String?
 
     private let virtueService: VirtueService
     private let calendar: Calendar
@@ -59,8 +61,23 @@ final class VirtueLogEditorViewModel: ObservableObject {
         dateString = makeDateString(from: date)
         let todayDefinition = virtueService.getTodayVirtueDefinition(date: date, calendar: calendar)
         selectedVirtueType = todayDefinition.type
-        isCompleted = false
-        reflection = ""
+        applyExistingLog(virtueService.getVirtuePracticeLogs(date: dateString, virtueType: selectedVirtueType).first)
+    }
+
+    /// 从服务器缓存同步当日、当前美德类型已有记录，避免再次保存覆盖上一次心得
+    func refreshFromService() {
+        let latest = virtueService.getVirtuePracticeLogs(date: dateString, virtueType: selectedVirtueType).first
+        applyExistingLog(latest)
+    }
+
+    private func applyExistingLog(_ log: VirtuePracticeLogData?) {
+        if let log {
+            isCompleted = log.isCompleted
+            reflection = log.reflection
+        } else {
+            isCompleted = false
+            reflection = ""
+        }
     }
 
     func setCompleted(_ value: Bool) {
@@ -76,15 +93,27 @@ final class VirtueLogEditorViewModel: ObservableObject {
         reflection = String(reflection.prefix(reflectionLimit))
     }
 
-    func save() {
-        let updated = virtueService.setVirtueCompleted(
+    func save(onSuccess: @escaping () -> Void) {
+        isSaving = true
+        saveError = nil
+        _ = virtueService.setVirtueCompleted(
             date: dateString,
             virtueType: selectedVirtueType,
             isCompleted: isCompleted,
             reflection: reflection
-        )
-        isCompleted = updated.isCompleted
-        reflection = updated.reflection
+        ) { [weak self] result in
+            Task { @MainActor in
+                self?.isSaving = false
+                switch result {
+                case .success(let updated):
+                    self?.isCompleted = updated.isCompleted
+                    self?.reflection = updated.reflection
+                    onSuccess()
+                case .failure(let error):
+                    self?.saveError = error.localizedDescription
+                }
+            }
+        }
     }
 
     private func makeDateString(from date: Date) -> String {

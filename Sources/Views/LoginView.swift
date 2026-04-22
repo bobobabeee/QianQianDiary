@@ -60,11 +60,10 @@ struct LoginView: View {
     private var formBlock: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("手机号")
+                Text("用户名")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(AppTheme.colors.onMuted)
-                AppInput(text: $viewModel.phone, placeholder: "请输入手机号")
-                    .keyboardType(.phonePad)
+                AppInput(text: $viewModel.username, placeholder: "请输入用户名")
                     .height(48)
                     .fontSize(16)
                     .cornerRadius(AppTheme.radius.standard)
@@ -72,52 +71,18 @@ struct LoginView: View {
                     .focusRingColor(AppTheme.colors.primary)
                     .textColor(AppTheme.colors.onSurface)
             }
-
-            Picker("登录方式", selection: $viewModel.loginMode) {
-                ForEach(LoginViewModel.LoginMode.allCases, id: \.self) { mode in
-                    Text(mode.rawValue).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            switch viewModel.loginMode {
-            case .password:
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("密码")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(AppTheme.colors.onMuted)
-                    AppInput(text: $viewModel.password, placeholder: "请输入密码")
-                        .secure(true)
-                        .height(48)
-                        .fontSize(16)
-                        .cornerRadius(AppTheme.radius.standard)
-                        .borderColor(AppTheme.colors.border)
-                        .focusRingColor(AppTheme.colors.primary)
-                        .textColor(AppTheme.colors.onSurface)
-                }
-            case .sms:
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 12) {
-                        AppInput(text: $viewModel.smsCode, placeholder: "请输入验证码")
-                            .keyboardType(.numberPad)
-                            .height(48)
-                            .fontSize(16)
-                            .cornerRadius(AppTheme.radius.standard)
-                            .borderColor(AppTheme.colors.border)
-                            .focusRingColor(AppTheme.colors.primary)
-                            .textColor(AppTheme.colors.onSurface)
-
-                        Button(action: {
-                            viewModel.sendSMSCode { }
-                        }) {
-                            Text(viewModel.smsCountdown > 0 ? "\(viewModel.smsCountdown)s 后重发" : "获取验证码")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundColor(viewModel.canSendSMS ? AppTheme.colors.primary : AppTheme.colors.onMuted)
-                        }
-                        .disabled(!viewModel.canSendSMS)
-                        .frame(width: 110, alignment: .center)
-                    }
-                }
+            VStack(alignment: .leading, spacing: 8) {
+                Text("密码")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(AppTheme.colors.onMuted)
+                AppInput(text: $viewModel.password, placeholder: "请输入密码")
+                    .secure(true)
+                    .height(48)
+                    .fontSize(16)
+                    .cornerRadius(AppTheme.radius.standard)
+                    .borderColor(AppTheme.colors.border)
+                    .focusRingColor(AppTheme.colors.primary)
+                    .textColor(AppTheme.colors.onSurface)
             }
         }
     }

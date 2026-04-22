@@ -18,10 +18,32 @@ final class SuccessDiaryEditorViewModel: ObservableObject {
     @Published var validationError: String = ""
 
     private let diaryService: DiaryService
+    private let initialEntry: SuccessDiaryEntryData?
+    private let prefillDate: String?
 
-    init(diaryService: DiaryService = DiaryService.shared) {
+    init(entry: SuccessDiaryEntryData? = nil, prefillDate: String? = nil, diaryService: DiaryService = DiaryService.shared) {
         self.diaryService = diaryService
-        self.selectedDate = Self.currentDateString()
+        self.initialEntry = entry
+        self.prefillDate = prefillDate
+        if let entry {
+            self.content = entry.content
+            self.selectedCategory = Self.editorCategory(from: entry.category)
+            self.selectedDate = entry.date
+        } else if let prefillDate, !prefillDate.isEmpty {
+            self.selectedDate = prefillDate
+        } else {
+            self.selectedDate = Self.currentDateString()
+        }
+    }
+
+    private static func editorCategory(from data: DiaryCategoryData) -> SuccessDiaryEditorCategory {
+        switch data {
+        case .work: return .work
+        case .health: return .health
+        case .relationship: return .relationship
+        case .growth: return .growth
+        case .daily: return .daily
+        }
     }
 
     var contentCountText: String {
@@ -42,18 +64,37 @@ final class SuccessDiaryEditorViewModel: ObservableObject {
     }
 
     var dateRange: [String] {
-        Self.makeDateRange(daysBack: 30)
+        var range = Self.makeDateRange(daysBack: 30)
+        let today = Self.currentDateString()
+        if let prefill = prefillDate, !prefill.isEmpty, prefill <= today, !range.contains(prefill) {
+            range.append(prefill)
+            range.sort()
+        }
+        return range
     }
 
     func onAppearResetForm() {
-        content = ""
-        selectedCategory = SuccessDiaryEditorCategory.daily
-        selectedDate = Self.currentDateString()
+        if let entry = initialEntry {
+            content = entry.content
+            selectedCategory = Self.editorCategory(from: entry.category)
+            selectedDate = entry.date
+        } else {
+            content = ""
+            selectedCategory = SuccessDiaryEditorCategory.daily
+            let today = Self.currentDateString()
+            let prefill = prefillDate.flatMap { !$0.isEmpty && $0 <= today ? $0 : nil }
+            selectedDate = prefill ?? today
+        }
         validationError = ""
     }
 
     func validateForm() -> Bool {
         validationError = ""
+
+        if selectedDate > Self.currentDateString() {
+            validationError = "不能为未来日期记录"
+            return false
+        }
 
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
@@ -75,25 +116,25 @@ final class SuccessDiaryEditorViewModel: ObservableObject {
 
         isSubmitting = true
 
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await Task.sleep(nanoseconds: 500_000_000)
+        let entry = SuccessDiaryEntryData(
+            id: initialEntry?.id ?? "",
+            date: selectedDate,
+            content: content.trimmingCharacters(in: .whitespacesAndNewlines),
+            category: categoryData(from: selectedCategory),
+            moodIcon: categoryIconName(selectedCategory)
+        )
 
-                let entry = SuccessDiaryEntryData(
-                    id: "",
-                    date: self.selectedDate,
-                    content: self.content.trimmingCharacters(in: .whitespacesAndNewlines),
-                    category: self.categoryData(from: self.selectedCategory),
-                    moodIcon: self.categoryIconName(self.selectedCategory)
-                )
-                self.diaryService.upsertEntry(entry)
-
+        diaryService.upsertEntry(entry) { [weak self] result in
+            Task { @MainActor in
+                guard let self else { return }
                 self.isSubmitting = false
-                router.navigate(to: AppRouter.Destination.diaryCalendarView(date: self.selectedDate), style: AppRouter.NavigationStyle.push)
-            } catch {
-                self.isSubmitting = false
-                self.validationError = "保存失败，请重试"
+                switch result {
+                case .success:
+                    router.dismiss()
+                case .failure(let err):
+                    // 便于区分 ATS/断网 与 业务错误（如 401、404）
+                    self.validationError = err.localizedDescription
+                }
             }
         }
     }

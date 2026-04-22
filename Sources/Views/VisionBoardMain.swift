@@ -184,7 +184,8 @@ private struct VisionBoardMainVisionCard: View {
                     title: vision.title,
                     categoryLabel: categoryLabel,
                     onShare: onShare,
-                    onMore: onEdit
+                    onMore: onEdit,
+                    onDelete: onDelete
                 )
 
                 VisionBoardMainVisionContent(
@@ -215,9 +216,12 @@ private struct VisionBoardMainVisionImageArea: View {
     let categoryLabel: String
     let onShare: () -> Void
     let onMore: () -> Void
+    let onDelete: () -> Void
 
     var body: some View {
         ZStack(alignment: .topLeading) {
+            // 从后端请求来的图片（http URL）或本地 asset
+            // 不再强制使用本地 asset 匹配逻辑，让真实上传的图片优先显示
             VisionImage.background(urlOrAsset: imageUrl)
                 .contentMode(RemoteImageContentMode.fill)
                 .placeholder(AppTheme.colors.muted)
@@ -227,7 +231,7 @@ private struct VisionBoardMainVisionImageArea: View {
 
                 Spacer(minLength: 8)
 
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     VisionBoardMainIconCircleButton(
                         icon: "Share2",
                         accessibilityLabel: "分享",
@@ -235,9 +239,16 @@ private struct VisionBoardMainVisionImageArea: View {
                     )
 
                     VisionBoardMainIconCircleButton(
-                        icon: "MoreVertical",
-                        accessibilityLabel: "更多操作",
+                        icon: "Edit2",
+                        accessibilityLabel: "编辑",
                         onTap: onMore
+                    )
+
+                    VisionBoardMainIconCircleButton(
+                        icon: "Trash2",
+                        accessibilityLabel: "删除",
+                        tintColor: AppTheme.colors.error,
+                        onTap: onDelete
                     )
                 }
             }
@@ -269,18 +280,19 @@ private struct VisionBoardMainCategoryBadge: View {
 private struct VisionBoardMainIconCircleButton: View {
     let icon: String
     let accessibilityLabel: String
+    var tintColor: Color? = nil
     let onTap: () -> Void
 
     var body: some View {
         AppButton(action: onTap) {
-            SafeIcon(icon, size: 16, color: AppTheme.colors.onSurface)
+            SafeIcon(icon, size: 16, color: tintColor ?? AppTheme.colors.onSurface)
         }
         .variant(ButtonVariant.secondary)
         .size(ButtonSize.icon)
         .height(32)
         .cornerRadius(16)
         .backgroundColor(AppTheme.colors.secondary)
-        .foregroundColor(AppTheme.colors.onSecondary)
+        .foregroundColor(tintColor ?? AppTheme.colors.onSecondary)
         .accessibilityLabel(Text(accessibilityLabel))
     }
 }

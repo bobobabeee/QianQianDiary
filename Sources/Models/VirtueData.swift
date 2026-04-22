@@ -18,6 +18,10 @@ final class VirtueDefinitionData: Codable, Identifiable, Hashable {
     var guidelines: [String]
     var iconName: String
 
+    private enum CodingKeys: String, CodingKey {
+        case id, type, name, quote, guidelines, iconName
+    }
+
     init(
         id: String,
         type: VirtueTypeData,
@@ -32,6 +36,20 @@ final class VirtueDefinitionData: Codable, Identifiable, Hashable {
         self.quote = quote
         self.guidelines = guidelines
         self.iconName = iconName
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let intId = try? container.decode(Int.self, forKey: .id) {
+            self.id = String(intId)
+        } else {
+            self.id = try container.decode(String.self, forKey: .id)
+        }
+        self.type = (try? container.decode(VirtueTypeData.self, forKey: .type)) ?? .friendly
+        self.name = (try? container.decode(String.self, forKey: .name)) ?? ""
+        self.quote = (try? container.decode(String.self, forKey: .quote)) ?? ""
+        self.guidelines = (try? container.decode([String].self, forKey: .guidelines)) ?? []
+        self.iconName = (try? container.decode(String.self, forKey: .iconName)) ?? "Smile"
     }
 
     static func == (lhs: VirtueDefinitionData, rhs: VirtueDefinitionData) -> Bool {
@@ -50,6 +68,10 @@ final class VirtuePracticeLogData: Codable, Identifiable, Hashable {
     var isCompleted: Bool
     var reflection: String
 
+    private enum CodingKeys: String, CodingKey {
+        case id, date, virtueType, isCompleted, reflection
+    }
+
     init(
         id: String,
         date: String,
@@ -62,6 +84,25 @@ final class VirtuePracticeLogData: Codable, Identifiable, Hashable {
         self.virtueType = virtueType
         self.isCompleted = isCompleted
         self.reflection = reflection
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let intId = try? container.decode(Int.self, forKey: .id) {
+            self.id = String(intId)
+        } else {
+            self.id = (try? container.decode(String.self, forKey: .id)) ?? ""
+        }
+        self.date = (try? container.decode(String.self, forKey: .date)) ?? ""
+        self.virtueType = (try? container.decode(VirtueTypeData.self, forKey: .virtueType)) ?? .friendly
+        if let boolVal = try? container.decode(Bool.self, forKey: .isCompleted) {
+            self.isCompleted = boolVal
+        } else if let intVal = try? container.decode(Int.self, forKey: .isCompleted) {
+            self.isCompleted = intVal != 0
+        } else {
+            self.isCompleted = false
+        }
+        self.reflection = (try? container.decode(String.self, forKey: .reflection)) ?? ""
     }
 
     static func == (lhs: VirtuePracticeLogData, rhs: VirtuePracticeLogData) -> Bool {

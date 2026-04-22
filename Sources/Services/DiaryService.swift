@@ -1,11 +1,20 @@
 import Foundation
 
+extension Notification.Name {
+    static let diaryCacheDidUpdate = Notification.Name("diaryCacheDidUpdate")
+}
+
 final class DiaryService {
     static let shared = DiaryService()
 
     private var categoryLabels: [DiaryCategoryData: String]
     private var entriesById: [String: SuccessDiaryEntryData]
     private var cachedUserId: String?
+    private var apiEntriesCache: [SuccessDiaryEntryData] = []
+    private var apiStatsCache: DiaryStatsSummaryData?
+    private var apiCategoryDistribution: [DiaryCategoryDistItem] = []
+    /// 后端 getCalendar 返回的有记录日期，key 为 "year-month"，用于日历小狗贴纸与本地记录同步
+    private var calendarRecordedDatesCache: [String: Set<String>] = [:]
 
     private init() {
         self.categoryLabels = [
@@ -29,16 +38,149 @@ final class DiaryService {
             if cachedUserId != nil {
                 entriesById = [:]
                 cachedUserId = nil
+                apiEntriesCache = []
+                apiStatsCache = nil
             }
             return
         }
-        if cachedUserId == uid { return }
+        if cachedUserId == uid, !APIConfig.useRealAPI { return }
         cachedUserId = uid
+        if APIConfig.useRealAPI {
+            return
+        }
         if let list = UserDataPersistence.shared.loadDiaryEntries(userId: uid), !list.isEmpty {
             entriesById = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
         } else {
             entriesById = [:]
             seedSampleEntriesIfNewUser()
+        }
+    }
+
+    /// 从 API 加载数据（useRealAPI 时由 ViewModel 在 onAppear 调用）
+    func loadFromAPI(completion: @escaping () -> Void) {
+        guard APIConfig.useRealAPI else {
+            ensureLoaded()
+            completion()
+            return
+        }
+        if let uid = currentUserId() {
+            cachedUserId = uid
+            if apiEntriesCache.isEmpty, let saved = UserDataPersistence.shared.loadDiaryEntries(userId: uid), !saved.isEmpty {
+                apiEntriesCache = saved
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: .diaryCacheDidUpdate, object: nil)
+                }
+            }
+        }
+        let group = DispatchGroup()
+        group.enter()
+        DiaryAPI.getEntries(page: 1, pageSize: 200) { [weak self] result in
+            guard let self else { group.leave(); return }
+            if case .success(let data) = result {
+                let currentUid = self.currentUserId()
+                let locallyAdded = (currentUid == self.cachedUserId)
+                    ? self.apiEntriesCache.filter { !Set(data.items.map(\.id)).contains($0.id) }
+                    : [] as [SuccessDiaryEntryData]
+                self.apiEntriesCache = data.items + locallyAdded
+                self.cachedUserId = currentUid
+                self.persistApiDiaryCacheIfNeeded()
+            }
+            // 失败时不清空缓存，避免网络异常或后端暂时不可用时丢失已加载/新建的记录
+            group.leave()
+        }
+        group.enter()
+        DiaryAPI.getStats { [weak self] result in
+            if case .success(let data) = result {
+                let cat = DiaryCategoryData(rawValue: data.topCategory) ?? .daily
+                self?.apiStatsCache = DiaryStatsSummaryData(
+                    totalCount: data.totalCount,
+                    thisWeekCount: data.thisWeekCount,
+                    topCategory: cat,
+                    streakDays: data.streakDays
+                )
+                self?.apiCategoryDistribution = data.categoryDistribution ?? []
+            } else {
+                self?.apiStatsCache = nil
+                self?.apiCategoryDistribution = []
+            }
+            group.leave()
+        }
+        group.notify(queue: .main) { [weak self] in
+            self?.persistApiDiaryCacheIfNeeded()
+            completion()
+        }
+    }
+
+    /// 真实 API 模式下把当前列表快照写入 Application Support，冷启动可先展示再与服务器合并
+    private func persistApiDiaryCacheIfNeeded() {
+        guard APIConfig.useRealAPI else { return }
+        guard let uid = currentUserId() ?? cachedUserId else { return }
+        UserDataPersistence.shared.saveDiaryEntries(apiEntriesCache, userId: uid)
+    }
+
+    /// 拉取某月有记录的日期，与本地缓存合并，供日历显示小狗贴纸
+    func loadCalendarForMonth(year: Int, month: Int, completion: @escaping () -> Void) {
+        guard APIConfig.useRealAPI else {
+            completion()
+            return
+        }
+        let key = String(format: "%d-%d", year, month)
+        DiaryAPI.getCalendar(year: year, month: month) { [weak self] result in
+            if case .success(let data) = result {
+                self?.calendarRecordedDatesCache[key] = Set(data.recordedDates)
+            }
+            DispatchQueue.main.async { completion() }
+        }
+    }
+
+    /// 某月有记录的日期集合（API + 本地新建的日期）
+    func recordedDatesForMonth(year: Int, month: Int) -> Set<String> {
+        let key = String(format: "%d-%d", year, month)
+        let monthPrefix = String(format: "%04d-%02d", year, month)
+        let fromApi = calendarRecordedDatesCache[key] ?? []
+        let fromLocal = Set(apiEntriesCache
+            .filter { $0.date.hasPrefix(monthPrefix) }
+            .map(\.date))
+        return fromApi.union(fromLocal)
+    }
+
+    /// 登出或切换账号时清空所有缓存，确保不泄露上一账号数据
+    func clearAllCaches() {
+        cachedUserId = nil
+        entriesById = [:]
+        apiEntriesCache = []
+        apiStatsCache = nil
+        apiCategoryDistribution = []
+        calendarRecordedDatesCache = [:]
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .diaryCacheDidUpdate, object: nil)
+        }
+    }
+
+    /// 按日期查询当日日记，直接返回接口结果，不缓存（供日历点击某日时调用）
+    func fetchEntriesForDate(_ date: String, completion: @escaping ([SuccessDiaryEntryData]) -> Void) {
+        guard !date.isEmpty else {
+            DispatchQueue.main.async { completion([]) }
+            return
+        }
+        if !APIConfig.useRealAPI {
+            ensureLoaded()
+            let list = entriesById.values.filter { $0.date == date }.sorted { $0.id < $1.id }
+            DispatchQueue.main.async { completion(list) }
+            return
+        }
+        print("[DiaryService] fetchEntriesForDate(\(date)) 开始请求…")
+        DiaryAPI.getEntries(date: date, page: 1, pageSize: 50) { [weak self] result in
+            switch result {
+            case .success(let data):
+                print("[DiaryService] fetchEntriesForDate(\(date)) 成功, 共 \(data.items.count) 条记录 (total=\(data.total))")
+                DispatchQueue.main.async { completion(data.items) }
+            case .failure(let error):
+                print("[DiaryService] fetchEntriesForDate(\(date)) 失败: \(error)")
+                let fallback = self?.apiEntriesCache.filter { $0.date == date } ?? []
+                print("[DiaryService] 回退到缓存, 找到 \(fallback.count) 条")
+                DispatchQueue.main.async { completion(fallback) }
+            }
         }
     }
 
@@ -84,21 +226,35 @@ final class DiaryService {
     }
 
     func getEntry(id: String) -> SuccessDiaryEntryData {
+        if APIConfig.useRealAPI {
+            if let found = apiEntriesCache.first(where: { $0.id == id }) { return found }
+            return defaultEntry(id: id, date: currentDateString(), category: .daily)
+        }
         ensureLoaded()
         if let found = entriesById[id] { return found }
         return defaultEntry(id: id, date: currentDateString(), category: .daily)
     }
 
     func getEntriesByDate(_ date: String) -> [SuccessDiaryEntryData] {
-        ensureLoaded()
-        let list = entriesById.values.filter { $0.date == date }.sorted { $0.id < $1.id }
+        let list: [SuccessDiaryEntryData]
+        if APIConfig.useRealAPI {
+            list = apiEntriesCache.filter { $0.date == date }.sorted { $0.id < $1.id }
+        } else {
+            ensureLoaded()
+            list = entriesById.values.filter { $0.date == date }.sorted { $0.id < $1.id }
+        }
         if !list.isEmpty { return list }
         return [defaultEntry(id: "d-fallback-\(date)", date: date, category: .daily)]
     }
 
     func getEntries(date: String? = nil, category: DiaryCategoryData? = nil) -> [SuccessDiaryEntryData] {
-        ensureLoaded()
-        let all = Array(entriesById.values)
+        let all: [SuccessDiaryEntryData]
+        if APIConfig.useRealAPI {
+            all = apiEntriesCache
+        } else {
+            ensureLoaded()
+            all = Array(entriesById.values)
+        }
         let filtered = all.filter { entry in
             if let date, entry.date != date { return false }
             if let category, entry.category != category { return false }
@@ -112,23 +268,123 @@ final class DiaryService {
         return [defaultEntry(id: "d-fallback-\(fallbackDate)-\(fallbackCategory.rawValue)", date: fallbackDate, category: fallbackCategory)]
     }
 
-    func upsertEntry(_ entry: SuccessDiaryEntryData) {
+    func upsertEntry(_ entry: SuccessDiaryEntryData, completion: ((Result<Void, Error>) -> Void)? = nil) {
+        if APIConfig.useRealAPI {
+            // 必须在 normalize 之前判断：normalizeEntry 会给空 id 生成客户端 UUID，
+            // 若用 normalized.id.isEmpty 判断会永远走「更新」，导致对新日记发 PUT 而服务器无此 id。
+            let isNew = entry.id.isEmpty
+            let normalized = normalizeEntry(entry)
+            if isNew {
+                let forCreate = SuccessDiaryEntryData(
+                    id: "",
+                    date: normalized.date,
+                    content: normalized.content,
+                    category: normalized.category,
+                    moodIcon: normalized.moodIcon
+                )
+                DiaryAPI.createEntry(entry: forCreate) { [weak self] result in
+                    if case .success(let created) = result {
+                        self?.apiEntriesCache.append(created)
+                        self?.persistApiDiaryCacheIfNeeded()
+                        DispatchQueue.main.async {
+                            NotificationCenter.default.post(name: .diaryCacheDidUpdate, object: nil)
+                        }
+                    }
+                    completion?(result.map { _ in () })
+                }
+            } else {
+                DiaryAPI.updateEntry(id: normalized.id, entry: normalized) { [weak self] result in
+                    if case .success(let updated) = result {
+                        if let idx = self?.apiEntriesCache.firstIndex(where: { $0.id == updated.id }) {
+                            self?.apiEntriesCache[idx] = updated
+                        } else {
+                            self?.apiEntriesCache.append(updated)
+                        }
+                        self?.persistApiDiaryCacheIfNeeded()
+                        DispatchQueue.main.async {
+                            NotificationCenter.default.post(name: .diaryCacheDidUpdate, object: nil)
+                        }
+                    }
+                    completion?(result.map { _ in () })
+                }
+            }
+            return
+        }
         ensureLoaded()
         let normalized = normalizeEntry(entry)
         entriesById[normalized.id] = normalized
         saveToPersistence()
+        completion?(.success(()))
     }
 
-    func deleteEntry(id: String) {
+    func deleteEntry(id: String, completion: ((Result<Void, Error>) -> Void)? = nil) {
+        if APIConfig.useRealAPI {
+            DiaryAPI.deleteEntry(id: id) { [weak self] result in
+                if case .success = result {
+                    self?.apiEntriesCache.removeAll { $0.id == id }
+                    self?.persistApiDiaryCacheIfNeeded()
+                    DispatchQueue.main.async {
+                        NotificationCenter.default.post(name: .diaryCacheDidUpdate, object: nil)
+                    }
+                }
+                completion?(result)
+            }
+            return
+        }
         ensureLoaded()
         entriesById.removeValue(forKey: id)
         saveToPersistence()
+        completion?(.success(()))
     }
 
     func getStatsSummary() -> DiaryStatsSummaryData {
+        if APIConfig.useRealAPI {
+            if let stats = apiStatsCache { return stats }
+            return computeStatsSummary(entries: apiEntriesCache, category: nil)
+        }
         ensureLoaded()
         let entries = Array(entriesById.values)
         return computeStatsSummary(entries: entries, category: nil)
+    }
+
+    func getCategoryDistribution() -> [DiaryCategoryDistItem] {
+        if APIConfig.useRealAPI, !apiCategoryDistribution.isEmpty {
+            return apiCategoryDistribution
+        }
+        if APIConfig.useRealAPI {
+            return buildCategoryDistributionFromEntries(apiEntriesCache)
+        }
+        return apiCategoryDistribution
+    }
+
+    private func buildCategoryDistributionFromEntries(_ entries: [SuccessDiaryEntryData]) -> [DiaryCategoryDistItem] {
+        var counts: [DiaryCategoryData: Int] = [:]
+        for e in entries { counts[e.category, default: 0] += 1 }
+        return DiaryCategoryData.allCases.compactMap { cat in
+            guard let c = counts[cat], c > 0 else { return nil }
+            return DiaryCategoryDistItem(category: cat.rawValue, count: c, label: getCategoryLabel(cat))
+        }
+    }
+
+    /// 按日期范围请求统计数据（包含 categoryDistribution），完成后更新缓存
+    func fetchStats(startDate: String? = nil, endDate: String? = nil, category: String? = nil, completion: @escaping () -> Void) {
+        guard APIConfig.useRealAPI else { completion(); return }
+        DiaryAPI.getStats(startDate: startDate, endDate: endDate, category: category) { [weak self] result in
+            if case .success(let data) = result {
+                let cat = DiaryCategoryData(rawValue: data.topCategory) ?? .daily
+                self?.apiStatsCache = DiaryStatsSummaryData(
+                    totalCount: data.totalCount,
+                    thisWeekCount: data.thisWeekCount,
+                    topCategory: cat,
+                    streakDays: data.streakDays
+                )
+                self?.apiCategoryDistribution = data.categoryDistribution ?? []
+                print("[DiaryService] ✅ 统计数据加载成功: total=\(data.totalCount) categories=\(data.categoryDistribution?.count ?? 0)")
+            } else if case .failure(let error) = result {
+                print("[DiaryService] ❌ 统计数据加载失败: \(error)")
+            }
+            DispatchQueue.main.async { completion() }
+        }
     }
 
     func getStatsSummary(dateRange: ClosedRange<String>?, category: DiaryCategoryData?) -> DiaryStatsSummaryData {

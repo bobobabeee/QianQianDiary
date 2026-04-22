@@ -28,7 +28,13 @@ private struct ChineseFriendlyTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UITextView, context: Context) {
-        if uiView.text != text { uiView.text = text }
+        context.coordinator.parent = self
+        if uiView.text != text {
+            // 程序化改 text 会同步触发 textViewDidChange，若在此时写 Binding 会触发「在视图更新中改状态」
+            context.coordinator.isApplyingExternalText = true
+            uiView.text = text
+            context.coordinator.isApplyingExternalText = false
+        }
         uiView.font = .systemFont(ofSize: fontSize)
         uiView.textColor = UIColor(textColor)
         uiView.isUserInteractionEnabled = isEnabled
@@ -40,15 +46,28 @@ private struct ChineseFriendlyTextView: UIViewRepresentable {
 
     class Coordinator: NSObject, UITextViewDelegate {
         var parent: ChineseFriendlyTextView
+        /// true 时表示来自 SwiftUI updateUIView 赋值，忽略 delegate 避免在视图更新周期写 Binding
+        var isApplyingExternalText = false
         init(_ parent: ChineseFriendlyTextView) { self.parent = parent }
         func textViewDidChange(_ textView: UITextView) {
-            parent.text = textView.text ?? ""
+            if isApplyingExternalText { return }
+            let newText = textView.text ?? ""
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if self.parent.text != newText {
+                    self.parent.text = newText
+                }
+            }
         }
         func textViewDidBeginEditing(_ textView: UITextView) {
-            parent.onFocusChange(true)
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.onFocusChange(true)
+            }
         }
         func textViewDidEndEditing(_ textView: UITextView) {
-            parent.onFocusChange(false)
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.onFocusChange(false)
+            }
         }
     }
 }
@@ -91,7 +110,11 @@ struct AppTextarea: View {
                 textColor: isEnabled ? textColor : textColor.opacity(0.5),
                 isEnabled: isEnabled,
                 minHeight: minHeight,
-                onFocusChange: { isFocused = $0 }
+                onFocusChange: { focused in
+                    Task { @MainActor in
+                        isFocused = focused
+                    }
+                }
             )
             .frame(minHeight: minHeight)
         }

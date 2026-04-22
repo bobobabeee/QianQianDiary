@@ -1,10 +1,16 @@
 import SwiftUI
+import Photos
 import PhotosUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct VisionBoardEditor: View {
     @EnvironmentObject var router: AppRouter
     @StateObject private var viewModel: VisionBoardEditorViewModel
+
+    @AppStorage("VisionBoardPhotoLibraryRationaleAcknowledged") private var photoLibraryRationaleAcknowledged = false
+    @State private var showPhotoLibraryRationaleAlert = false
+    @State private var showVisionPhotoPickerSheet = false
 
     init(id: String? = nil) {
         _viewModel = StateObject(wrappedValue: VisionBoardEditorViewModel(id: id))
@@ -18,10 +24,9 @@ struct VisionBoardEditor: View {
                 VStack(spacing: 24) {
                     VisionBoardEditorImageUploadSection(
                         imageSource: viewModel.imageSource,
-                        selectedPhotoItem: $viewModel.selectedPhotoItem,
                         isDisabled: viewModel.isInputDisabled,
-                        isLoading: viewModel.isImageLoading,
-                        onRemove: viewModel.removeImage
+                        onRemove: viewModel.removeImage,
+                        onRequestPhotoPick: requestVisionPhotoPick
                     )
 
                     VisionBoardEditorTextFieldSection(
@@ -68,8 +73,32 @@ struct VisionBoardEditor: View {
         .onAppear {
             viewModel.loadIfNeeded()
         }
-        .onChange(of: viewModel.selectedPhotoItem) { _ in
-            Task { await viewModel.handlePhotoItemChanged() }
+        .alert("访问相册", isPresented: $showPhotoLibraryRationaleAlert) {
+            Button("取消", role: .cancel) {}
+            Button("去选择照片") {
+                photoLibraryRationaleAcknowledged = true
+                showPhotoLibraryRationaleAlert = false
+                DispatchQueue.main.async {
+                    showVisionPhotoPickerSheet = true
+                }
+            }
+        } message: {
+            Text("我们需要访问您的相册，以便您可以选择并上传照片到您的「愿景板」中。")
+        }
+        .sheet(isPresented: $showVisionPhotoPickerSheet) {
+            VisionBoardPHPickerRepresentable(
+                isPresented: $showVisionPhotoPickerSheet,
+                onPicked: { data in viewModel.applyPickedImageData(data) }
+            )
+            .ignoresSafeArea()
+        }
+        .alert("提示", isPresented: Binding(
+            get: { viewModel.saveError != nil },
+            set: { if !$0 { viewModel.saveError = nil } }
+        )) {
+            Button("确定", role: .cancel) { viewModel.saveError = nil }
+        } message: {
+            Text(viewModel.saveError ?? "")
         }
     }
 
@@ -77,8 +106,21 @@ struct VisionBoardEditor: View {
         Task {
             let savedId = await viewModel.save()
             if savedId != nil {
+                // 保存成功后通知 VisionService 刷新缓存，并使用 root 导航重新加载展示页
+                // 这样外部的愿景板预览（首页 + 愿景板主页面）都能看到最新上传的图片
+                VisionService.shared.loadFromAPI {
+                    print("[VisionBoardEditor] 保存成功，已触发全局数据刷新")
+                }
                 router.navigate(to: AppRouter.Destination.visionBoardMain, style: AppRouter.NavigationStyle.root)
             }
+        }
+    }
+
+    private func requestVisionPhotoPick() {
+        if photoLibraryRationaleAcknowledged {
+            showVisionPhotoPickerSheet = true
+        } else {
+            showPhotoLibraryRationaleAlert = true
         }
     }
 }
@@ -248,10 +290,9 @@ private struct VisionBoardEditorActionButtons: View {
 
 private struct VisionBoardEditorImageUploadSection: View {
     let imageSource: VisionBoardEditorViewModel.VisionBoardEditorImageSource
-    @Binding var selectedPhotoItem: PhotosPickerItem?
     let isDisabled: Bool
-    let isLoading: Bool
     let onRemove: () -> Void
+    let onRequestPhotoPick: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -264,42 +305,25 @@ private struct VisionBoardEditorImageUploadSection: View {
                 if hasImage {
                     VisionBoardEditorImagePreview(
                         imageSource: imageSource,
-                        isLoading: isLoading,
-                        selectedPhotoItem: $selectedPhotoItem,
                         onRemove: onRemove,
-                        isDisabled: isDisabled
+                        isDisabled: isDisabled,
+                        onRequestPhotoPick: onRequestPhotoPick
                     )
                 } else {
-                    VisionBoardEditorImagePlaceholder(isDisabled: isDisabled, isLoading: isLoading)
+                    VisionBoardEditorImagePlaceholder(isDisabled: isDisabled)
                         .overlay {
-                            PhotosPicker(
-                                selection: $selectedPhotoItem,
-                                matching: .images,
-                                photoLibrary: .shared()
-                            ) {
+                            Button(action: onRequestPhotoPick) {
                                 Color.clear
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                                     .contentShape(Rectangle())
                             }
-                            .disabled(isDisabled || isLoading)
                             .buttonStyle(.plain)
-                            .allowsHitTesting(!isDisabled && !isLoading)
+                            .disabled(isDisabled)
+                            .allowsHitTesting(!isDisabled)
                         }
                 }
             }
             .aspectRatio(1.0, contentMode: .fit)
-
-            if isLoading {
-                HStack(spacing: 8) {
-                    SafeIcon("Loader2", size: 16, color: AppTheme.colors.onMuted)
-                    Text("上传中...")
-                        .font(.system(size: 14))
-                        .foregroundColor(AppTheme.colors.onMuted)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-            }
         }
     }
 
@@ -317,32 +341,27 @@ private struct VisionBoardEditorImageUploadSection: View {
 
 private struct VisionBoardEditorImagePreview: View {
     let imageSource: VisionBoardEditorViewModel.VisionBoardEditorImageSource
-    let isLoading: Bool
-    @Binding var selectedPhotoItem: PhotosPickerItem?
     let onRemove: () -> Void
     let isDisabled: Bool
+    let onRequestPhotoPick: () -> Void
 
     var body: some View {
         ZStack {
             previewContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(AppTheme.colors.muted)
+                .contentShape(RoundedRectangle(cornerRadius: AppTheme.radius.standard, style: .continuous))
                 .clipShape(RoundedRectangle(cornerRadius: AppTheme.radius.standard, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: AppTheme.radius.standard, style: .continuous)
                         .stroke(AppTheme.colors.border, lineWidth: 2)
                 )
-                .clipped()
 
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
 
                 HStack(spacing: 8) {
-                    PhotosPicker(
-                        selection: $selectedPhotoItem,
-                        matching: .images,
-                        photoLibrary: .shared()
-                    ) {
+                    Button(action: onRequestPhotoPick) {
                         HStack(spacing: 6) {
                             SafeIcon("Edit2", size: 16, color: AppTheme.colors.onSecondary)
                             Text("更换")
@@ -354,26 +373,19 @@ private struct VisionBoardEditorImagePreview: View {
                         .background(AppTheme.colors.secondary)
                         .cornerRadius(AppTheme.radius.small)
                     }
-                    .disabled(isDisabled || isLoading)
+                    .disabled(isDisabled)
                     .buttonStyle(.plain)
 
                     VisionBoardEditorSmallButton(
                         title: "删除",
                         icon: "Trash2",
                         variant: ButtonVariant.destructive,
-                        isDisabled: isDisabled || isLoading,
+                        isDisabled: isDisabled,
                         onTap: onRemove
                     )
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
-            }
-
-            if isLoading {
-                Color.black.opacity(0.50)
-                    .clipShape(RoundedRectangle(cornerRadius: AppTheme.radius.standard, style: .continuous))
-
-                SafeIcon("Loader2", size: 32, color: Color.white)
             }
         }
         .accessibilityLabel(Text("愿景图片预览"))
@@ -391,9 +403,13 @@ private struct VisionBoardEditorImagePreview: View {
 
         case VisionBoardEditorViewModel.VisionBoardEditorImageSource.pickedData(let data):
             if let uiImage = UIImage(data: data) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
+                GeometryReader { geo in
+                    Image(uiImage: uiImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .clipped()
+                }
             } else {
                 AppTheme.colors.muted
             }
@@ -403,7 +419,6 @@ private struct VisionBoardEditorImagePreview: View {
 
 private struct VisionBoardEditorImagePlaceholder: View {
     let isDisabled: Bool
-    var isLoading: Bool = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -479,6 +494,63 @@ private struct VisionBoardEditorSmallButton: View {
             return AppTheme.colors.onError
         default:
             return AppTheme.colors.onSurface
+        }
+    }
+}
+
+// MARK: - 系统相册选择（首次说明后使用 PHPicker，触发系统相册权限）
+
+private struct VisionBoardPHPickerRepresentable: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
+    let onPicked: (Data) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var config = PHPickerConfiguration(photoLibrary: .shared())
+        config.filter = .images
+        config.selectionLimit = 1
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {
+        context.coordinator.parent = self
+    }
+
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        var parent: VisionBoardPHPickerRepresentable
+
+        init(_ parent: VisionBoardPHPickerRepresentable) {
+            self.parent = parent
+        }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            parent.isPresented = false
+            guard let first = results.first else { return }
+            let provider = first.itemProvider
+            if provider.canLoadObject(ofClass: UIImage.self) {
+                provider.loadObject(ofClass: UIImage.self) { [weak self] image, _ in
+                    DispatchQueue.main.async {
+                        guard let self, let uiImage = image as? UIImage else { return }
+                        if let jpeg = uiImage.jpegData(compressionQuality: 0.92) {
+                            self.parent.onPicked(jpeg)
+                        } else if let png = uiImage.pngData() {
+                            self.parent.onPicked(png)
+                        }
+                    }
+                }
+            } else {
+                provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { [weak self] data, _ in
+                    DispatchQueue.main.async {
+                        guard let self, let data, !data.isEmpty else { return }
+                        self.parent.onPicked(data)
+                    }
+                }
+            }
         }
     }
 }

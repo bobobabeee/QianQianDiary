@@ -20,7 +20,7 @@ struct QianqianAvatar: View {
     var dialogText: String? = nil
     var size: SizeVariant = SizeVariant.md
 
-    /// 钱钱头像（本地资源）。请在 Assets.xcassets 里添加同名图片。
+    /// Poppy 头像（本地资源）。请在 Assets.xcassets 里添加同名图片。
     private let qianqianAssetName = "qianqian_avatar"
     private let qianqianFallbackImageUrl = "https://spark-builder.s3.cn-north-1.amazonaws.com.cn/image/2026/3/4/0630aebe-131b-40ba-a901-93437bf84147.png"
 
@@ -71,7 +71,7 @@ private struct AvatarCircle: View {
                     .fill(AppTheme.colors.primary.opacity(0.10))
             )
             .clipShape(Circle())
-            .accessibilityLabel(Text("钱钱"))
+            .accessibilityLabel(Text("Poppy"))
     }
 }
 

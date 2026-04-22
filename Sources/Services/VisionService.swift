@@ -5,6 +5,7 @@ final class VisionService {
 
     private var itemsById: [String: VisionItemData]
     private var cachedUserId: String?
+    private var apiItemsCache: [VisionItemData] = []
 
     private init() {
         self.itemsById = [:]
@@ -21,17 +22,57 @@ final class VisionService {
             if cachedUserId != nil {
                 itemsById = [:]
                 cachedUserId = nil
+                apiItemsCache = []
             }
             return
         }
-        if cachedUserId == uid { return }
+        if cachedUserId == uid, !APIConfig.useRealAPI { return }
         cachedUserId = uid
+        if APIConfig.useRealAPI { return }
         if let list = UserDataPersistence.shared.loadVisionItems(userId: uid), !list.isEmpty {
             itemsById = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
         } else {
             itemsById = [:]
             seedSampleItemsIfNewUser()
         }
+    }
+
+    /// 登出或切换账号时清空所有缓存，确保不泄露上一账号数据
+    func clearAllCaches() {
+        cachedUserId = nil
+        itemsById = [:]
+        apiItemsCache = []
+    }
+
+    func loadFromAPI(completion: @escaping () -> Void = {}) {
+        guard APIConfig.useRealAPI else {
+            ensureLoaded()
+            completion()
+            return
+        }
+        if let uid = currentUserId() {
+            cachedUserId = uid
+            if apiItemsCache.isEmpty, let saved = UserDataPersistence.shared.loadVisionItems(userId: uid), !saved.isEmpty {
+                apiItemsCache = saved
+            }
+        }
+        VisionAPI.getItems { [weak self] result in
+            switch result {
+            case .success(let list):
+                self?.apiItemsCache = list
+                self?.persistApiVisionIfNeeded()
+                print("[VisionService] ✅ 从API加载到 \(list.count) 条愿景数据")
+            case .failure:
+                print("[VisionService] ⚠️ API加载愿景失败，保留上次同步到本地的数据")
+            }
+            DispatchQueue.main.async { completion() }
+        }
+    }
+
+    private func persistApiVisionIfNeeded() {
+        guard APIConfig.useRealAPI else { return }
+        guard let uid = currentUserId() ?? cachedUserId else { return }
+        UserDataPersistence.shared.saveVisionItems(apiItemsCache, userId: uid)
     }
 
     /// 新用户首次进入时写入示例愿景（含 work、growth、health、relationship），并立即持久化
@@ -49,7 +90,7 @@ final class VisionService {
                 id: "v-sample-2",
                 category: .growth,
                 title: "坚持阅读与记录",
-                description: "每天读书或写日记，像钱钱一样养成好习惯。",
+                description: "每天读书或写日记，像 Poppy 一样养成好习惯。",
                 imageUrl: "asset:vision_growth",
                 targetDate: ""
             ),
@@ -81,14 +122,22 @@ final class VisionService {
     }
 
     func getItem(id: String) -> VisionItemData {
+        if APIConfig.useRealAPI {
+            if let found = apiItemsCache.first(where: { $0.id == id }) { return found }
+        }
         ensureLoaded()
         if let found = itemsById[id] { return found }
         return defaultItem(id: id, category: .growth)
     }
 
     func getItems(category: DiaryCategoryData? = nil) -> [VisionItemData] {
-        ensureLoaded()
-        let all = Array(itemsById.values)
+        let all: [VisionItemData]
+        if APIConfig.useRealAPI {
+            all = apiItemsCache
+        } else {
+            ensureLoaded()
+            all = Array(itemsById.values)
+        }
         let filtered = all.filter { item in
             if let category { return item.category == category }
             return true
@@ -100,17 +149,55 @@ final class VisionService {
         return [defaultItem(id: "v-fallback-\(fallbackCategory.rawValue)", category: fallbackCategory)]
     }
 
-    func upsertItem(_ item: VisionItemData) {
+    func upsertItem(_ item: VisionItemData, completion: ((Result<String?, Error>) -> Void)? = nil) {
+        if APIConfig.useRealAPI {
+            let normalized = normalizeItem(item)
+            let isUpdate = apiItemsCache.contains { $0.id == normalized.id }
+            if isUpdate {
+                VisionAPI.updateItem(id: normalized.id, item: normalized) { [weak self] result in
+                    if case .success(let updated) = result {
+                        if let idx = self?.apiItemsCache.firstIndex(where: { $0.id == updated.id }) {
+                            self?.apiItemsCache[idx] = updated
+                        } else {
+                            self?.apiItemsCache.append(updated)
+                        }
+                        self?.persistApiVisionIfNeeded()
+                    }
+                    completion?(result.map { $0.id })
+                }
+            } else {
+                VisionAPI.createItem(item: normalized) { [weak self] result in
+                    if case .success(let created) = result {
+                        self?.apiItemsCache.append(created)
+                        self?.persistApiVisionIfNeeded()
+                    }
+                    completion?(result.map { $0.id })
+                }
+            }
+            return
+        }
         ensureLoaded()
         let normalized = normalizeItem(item)
         itemsById[normalized.id] = normalized
         saveToPersistence()
+        completion?(.success(normalized.id))
     }
 
-    func deleteItem(id: String) {
+    func deleteItem(id: String, completion: ((Result<Void, Error>) -> Void)? = nil) {
+        if APIConfig.useRealAPI {
+            VisionAPI.deleteItem(id: id) { [weak self] result in
+                if case .success = result {
+                    self?.apiItemsCache.removeAll { $0.id == id }
+                    self?.persistApiVisionIfNeeded()
+                }
+                completion?(result)
+            }
+            return
+        }
         ensureLoaded()
         itemsById.removeValue(forKey: id)
         saveToPersistence()
+        completion?(.success(()))
     }
 
     private func defaultItem(id: String, category: DiaryCategoryData) -> VisionItemData {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum RemoteImageMode {
     case fixed
@@ -35,18 +36,13 @@ struct RemoteImage: View {
     }
 
     private var fixedSizeImage: some View {
-        AsyncImage(url: URL(string: url)) { phase in
-            switch phase {
-            case .success(let image):
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: swiftUIContentMode)
-            default:
-                placeholder
-            }
-        }
+        CachedRemoteImageView(
+            url: url,
+            contentMode: swiftUIContentMode,
+            failureTint: placeholder
+        )
         .frame(width: width, height: height)
-        .background(placeholder)
+        .background(Color.clear)
         .cornerRadius(cornerRadius)
         .clipped()
     }
@@ -56,21 +52,16 @@ struct RemoteImage: View {
         let safeRatio = rawRatio > 0 ? rawRatio : 1.0
 
         return GeometryReader { geometry in
-            AsyncImage(url: URL(string: url)) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: swiftUIContentMode)
-                default:
-                    placeholder
-                }
-            }
+            CachedRemoteImageView(
+                url: url,
+                contentMode: swiftUIContentMode,
+                failureTint: placeholder
+            )
             .frame(
                 width: geometry.size.width,
                 height: geometry.size.width * safeRatio
             )
-            .background(placeholder)
+            .background(Color.clear)
             .clipped()
         }
         .aspectRatio(1.0 / safeRatio, contentMode: .fit)
@@ -79,18 +70,12 @@ struct RemoteImage: View {
 
     private var backgroundImage: some View {
         GeometryReader { geometry in
-            AsyncImage(url: URL(string: url)) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: swiftUIContentMode)
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                default:
-                    placeholder
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                }
-            }
+            CachedRemoteImageView(
+                url: url,
+                contentMode: swiftUIContentMode,
+                failureTint: placeholder
+            )
+            .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
         }
         .cornerRadius(cornerRadius)
@@ -132,6 +117,94 @@ extension RemoteImage {
 
     static func background(url: String) -> RemoteImage {
         RemoteImage(url: url, mode: .background)
+    }
+}
+
+// MARK: - 本地缓存加载（内存 + 磁盘）
+
+private struct CachedRemoteImageView: View {
+    let url: String
+    let contentMode: ContentMode
+    let failureTint: Color
+
+    @State private var uiImage: UIImage?
+    @State private var loadFailed = false
+
+    var body: some View {
+        Group {
+            if let uiImage {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(contentMode: contentMode)
+            } else if loadFailed {
+                RemoteImageFailurePlaceholder(tint: failureTint)
+            } else {
+                RemoteImageLoadingPlaceholder()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task(id: url) {
+            loadFailed = false
+            // 先同步读内存/磁盘，避免每次进页都先闪「加载中」再等 async 调度
+            if let cached = ImageURLCache.shared.synchronousCachedUIImage(for: url) {
+                uiImage = cached
+                return
+            }
+            // 无缓存时再显示加载态并走网络（不要先把 uiImage 置 nil，减少无意义闪屏）
+            if let img = await ImageURLCache.shared.uiImage(for: url) {
+                uiImage = img
+                loadFailed = false
+            } else {
+                uiImage = nil
+                loadFailed = true
+            }
+        }
+    }
+}
+
+// MARK: - 加载 / 失败占位（避免纯灰块）
+
+/// 网络图加载中：柔和渐变呼吸 + 转圈，与 ChaTin 主色协调
+private struct RemoteImageLoadingPlaceholder: View {
+    var body: some View {
+        TimelineView(.periodic(from: Date(), by: 1.0 / 24.0)) { timeline in
+            let t = timeline.date.timeIntervalSince1970
+            let wave = (sin(t * 2.2) + 1) * 0.5
+
+            ZStack {
+                AppTheme.colors.surface
+                LinearGradient(
+                    colors: [
+                        AppTheme.colors.secondary.opacity(0.12 + wave * 0.14),
+                        AppTheme.colors.primary.opacity(0.05 + wave * 0.10),
+                        AppTheme.colors.secondary.opacity(0.12 + wave * 0.14)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                ProgressView()
+                    .controlSize(.regular)
+                    .tint(AppTheme.colors.primary.opacity(0.72))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityLabel(Text("图片加载中"))
+    }
+}
+
+private struct RemoteImageFailurePlaceholder: View {
+    var tint: Color
+
+    var body: some View {
+        ZStack {
+            AppTheme.colors.secondary.opacity(0.22)
+            Image(systemName: "photo")
+                .font(.system(size: 22, weight: .light))
+                .foregroundStyle(tint.opacity(0.45))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityLabel(Text("图片加载失败"))
     }
 }
 

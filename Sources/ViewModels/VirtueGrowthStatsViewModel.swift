@@ -54,12 +54,22 @@ import Foundation
     }
 
     func onAppear() {
+        reloadFromAPI()
         if isContentReady { return }
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 120_000_000)
             await MainActor.run {
                 self?.isContentReady = true
             }
+        }
+    }
+
+    func reloadFromAPI() {
+        virtueService.loadFromAPI { [weak self] in
+            guard let self else { return }
+            let defs = self.virtueService.getAllVirtueDefinitions()
+            self.definitions = Dictionary(uniqueKeysWithValues: defs.map { ($0.type, $0) })
+            self.logs = self.virtueService.getVirtuePracticeLogs(date: nil, virtueType: nil)
         }
     }
 
@@ -71,8 +81,9 @@ import Foundation
 
         for log in logs {
             if !log.isCompleted { continue }
+            let segments = max(1, Self.reflectionSegmentCount(log.reflection))
             let current = stats[log.virtueType] ?? VirtueGrowthStatsVirtueStat(count: 0, lastDate: nil)
-            let nextCount = current.count + 1
+            let nextCount = current.count + segments
             let nextLastDate: String?
             if let existingLast = current.lastDate {
                 nextLastDate = max(existingLast, log.date)
@@ -174,14 +185,20 @@ import Foundation
 
         if completed.isEmpty { return [] }
 
+        let expanded = Self.expandLogsForTimeline(completed)
         var byDate: [String: [VirtuePracticeLogData]] = [:]
-        for log in completed {
+        for log in expanded {
             byDate[log.date, default: []].append(log)
         }
 
         let sortedDates = byDate.keys.sorted(by: >)
         return sortedDates.map { date in
-            let groupLogs = byDate[date] ?? []
+            let groupLogs = (byDate[date] ?? []).sorted { lhs, rhs in
+                if lhs.virtueType.rawValue != rhs.virtueType.rawValue {
+                    return lhs.virtueType.rawValue < rhs.virtueType.rawValue
+                }
+                return lhs.id < rhs.id
+            }
             return VirtueGrowthStatsTimelineGroup(
                 date: date,
                 displayDate: displayDateLabel(for: date),
@@ -215,7 +232,15 @@ import Foundation
         let today = todayDateString
         let def = todayVirtueDefinition
         let dayLogs = virtueService.getVirtuePracticeLogs(date: today, virtueType: nil)
-        return dayLogs.first { $0.virtueType == def.type } ?? dayLogs.first!
+        if let match = dayLogs.first(where: { $0.virtueType == def.type }) { return match }
+        if let first = dayLogs.first { return first }
+        return VirtuePracticeLogData(
+            id: "local-empty-\(today)-\(def.type.rawValue)",
+            date: today,
+            virtueType: def.type,
+            isCompleted: false,
+            reflection: ""
+        )
     }
 
     private var totalPractices: Int {
@@ -252,9 +277,41 @@ import Foundation
     }
 
     private func load() {
-        let defs = virtueService.getAllVirtueDefinitions()
-        definitions = Dictionary(uniqueKeysWithValues: defs.map { ($0.type, $0) })
-        logs = virtueService.getVirtuePracticeLogs(date: nil, virtueType: nil)
+        reloadFromAPI()
+    }
+
+    private static func reflectionSegmentCount(_ reflection: String) -> Int {
+        let parts = reflection.components(separatedBy: VirtueService.virtueReflectionEntrySeparator)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return max(1, parts.count)
+    }
+
+    /// 将合并保存的多段心得拆成多条时间轴条目（同日同类型仍是一条 API 记录）
+    private static func expandLogsForTimeline(_ logs: [VirtuePracticeLogData]) -> [VirtuePracticeLogData] {
+        let sep = VirtueService.virtueReflectionEntrySeparator
+        var out: [VirtuePracticeLogData] = []
+        for log in logs {
+            let parts = log.reflection.components(separatedBy: sep)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            if parts.count <= 1 {
+                out.append(log)
+                continue
+            }
+            for (i, part) in parts.enumerated() {
+                out.append(
+                    VirtuePracticeLogData(
+                        id: "\(log.id)#\(i)",
+                        date: log.date,
+                        virtueType: log.virtueType,
+                        isCompleted: log.isCompleted,
+                        reflection: part
+                    )
+                )
+            }
+        }
+        return out
     }
 
     private func displayDateLabel(for isoDate: String) -> String {

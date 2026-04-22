@@ -50,6 +50,13 @@ final class SuccessDiaryStatsViewModel: ObservableObject {
         self.locale = locale
     }
 
+    func loadFromAPI(completion: @escaping () -> Void) {
+        let (startDate, endDate) = currentMonthRange()
+        diaryService.fetchStats(startDate: startDate, endDate: endDate) {
+            completion()
+        }
+    }
+
     var overviewItems: [SuccessDiaryStatsOverviewItem] {
         let stats = diaryService.getStatsSummary()
         return [
@@ -58,70 +65,62 @@ final class SuccessDiaryStatsViewModel: ObservableObject {
                 valueText: "\(stats.totalCount)",
                 description: "累计成功事件",
                 icon: "BookOpen",
-                trend: StatsCard.Trend.up,
-                trendValue: "+12 本周"
+                trend: stats.totalCount > 0 ? StatsCard.Trend.up : StatsCard.Trend.neutral,
+                trendValue: nil
             ),
             SuccessDiaryStatsOverviewItem(
                 title: "本周记录",
                 valueText: "\(stats.thisWeekCount)",
                 description: "这周的成就",
                 icon: "Calendar",
-                trend: StatsCard.Trend.neutral,
-                trendValue: nil
+                trend: stats.thisWeekCount > 0 ? StatsCard.Trend.up : StatsCard.Trend.neutral,
+                trendValue: stats.thisWeekCount > 0 ? "+\(stats.thisWeekCount) 本周" : nil
             ),
             SuccessDiaryStatsOverviewItem(
                 title: "连续天数",
                 valueText: "\(stats.streakDays)",
                 description: "坚持记录中",
                 icon: "Flame",
-                trend: StatsCard.Trend.up,
-                trendValue: "+5 天"
+                trend: stats.streakDays > 0 ? StatsCard.Trend.up : StatsCard.Trend.neutral,
+                trendValue: stats.streakDays > 0 ? "+\(stats.streakDays) 天" : nil
             )
         ]
     }
 
     var categoryItems: [SuccessDiaryStatsCategoryItem] {
-        [
-            SuccessDiaryStatsCategoryItem(
-                category: DiaryCategoryData.work,
-                label: diaryService.getCategoryLabel(DiaryCategoryData.work),
-                count: 45,
-                percentage: 29,
-                color: AppTheme.colors.chart1
-            ),
-            SuccessDiaryStatsCategoryItem(
-                category: DiaryCategoryData.health,
-                label: diaryService.getCategoryLabel(DiaryCategoryData.health),
-                count: 38,
-                percentage: 24,
-                color: AppTheme.colors.chart2
-            ),
-            SuccessDiaryStatsCategoryItem(
-                category: DiaryCategoryData.relationship,
-                label: diaryService.getCategoryLabel(DiaryCategoryData.relationship),
-                count: 35,
-                percentage: 22,
-                color: AppTheme.colors.chart3
-            ),
-            SuccessDiaryStatsCategoryItem(
-                category: DiaryCategoryData.growth,
-                label: diaryService.getCategoryLabel(DiaryCategoryData.growth),
-                count: 28,
-                percentage: 18,
-                color: AppTheme.colors.chart4
-            ),
-            SuccessDiaryStatsCategoryItem(
-                category: DiaryCategoryData.daily,
-                label: diaryService.getCategoryLabel(DiaryCategoryData.daily),
-                count: 10,
-                percentage: 7,
-                color: AppTheme.colors.chart5
-            )
+        let dist = diaryService.getCategoryDistribution()
+        guard !dist.isEmpty else { return [] }
+
+        let total = max(1, dist.reduce(0) { $0 + $1.count })
+        let colorMap: [String: Color] = [
+            "WORK": AppTheme.colors.chart1,
+            "HEALTH": AppTheme.colors.chart2,
+            "RELATIONSHIP": AppTheme.colors.chart3,
+            "GROWTH": AppTheme.colors.chart4,
+            "DAILY": AppTheme.colors.chart5,
         ]
+        let fallbackColors: [Color] = [
+            AppTheme.colors.chart1, AppTheme.colors.chart2, AppTheme.colors.chart3,
+            AppTheme.colors.chart4, AppTheme.colors.chart5,
+        ]
+
+        return dist.enumerated().map { idx, item in
+            let cat = DiaryCategoryData(rawValue: item.category) ?? .daily
+            let pct = (item.count * 100) / total
+            let color = colorMap[item.category] ?? fallbackColors[idx % fallbackColors.count]
+            return SuccessDiaryStatsCategoryItem(
+                category: cat,
+                label: item.label.isEmpty ? diaryService.getCategoryLabel(cat) : item.label,
+                count: item.count,
+                percentage: pct,
+                color: color
+            )
+        }
     }
 
     var categoryTotalCountText: String {
-        "156"
+        let total = categoryItems.reduce(0) { $0 + $1.count }
+        return "\(total)"
     }
 
     var categoryTopHintTitle: String {
@@ -129,7 +128,7 @@ final class SuccessDiaryStatsViewModel: ObservableObject {
     }
 
     var categoryTopHintBody: String {
-        let first = categoryItems.first
+        let first = categoryItems.max(by: { $0.count < $1.count })
         let label = first?.label ?? "某个类型"
         return "\(label)是你最常记录的成功类型，继续保持这份热情！"
     }
@@ -228,5 +227,18 @@ final class SuccessDiaryStatsViewModel: ObservableObject {
         out.calendar = calendar
         out.dateFormat = "yyyy-MM-dd"
         return out.string(from: Date())
+    }
+
+    private func currentMonthRange() -> (startDate: String, endDate: String) {
+        let now = Date()
+        let comps = calendar.dateComponents([.year, .month], from: now)
+        let year = comps.year ?? 2026
+        let month = comps.month ?? 1
+        let startDate = String(format: "%04d-%02d-01", year, month)
+        let nextMonth = calendar.date(byAdding: .month, value: 1, to: calendar.date(from: comps) ?? now) ?? now
+        let lastDay = calendar.date(byAdding: .day, value: -1, to: nextMonth) ?? now
+        let dayOfLastDay = calendar.component(.day, from: lastDay)
+        let endDate = String(format: "%04d-%02d-%02d", year, month, dayOfLastDay)
+        return (startDate, endDate)
     }
 }

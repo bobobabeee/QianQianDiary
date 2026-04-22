@@ -19,7 +19,7 @@ struct Home: View {
                     HomeHeroSectionView(
                         todayText: viewModel.todayText,
                         heroMessage: viewModel.heroMessage,
-                        onQuickRecord: { router.navigate(to: AppRouter.Destination.successDiaryEditor, style: AppRouter.NavigationStyle.push) },
+                        onQuickRecord: { router.navigate(to: AppRouter.Destination.successDiaryEditor(), style: AppRouter.NavigationStyle.push) },
                         onViewStats: { router.navigate(to: AppRouter.Destination.successDiaryStats, style: AppRouter.NavigationStyle.push) }
                     )
 
@@ -27,7 +27,7 @@ struct Home: View {
                         highlights: viewModel.highlights,
                         onTapItem: { router.navigate(to: AppRouter.Destination.diaryCalendarView(date: $0), style: AppRouter.NavigationStyle.push) },
                         onTapViewAll: { router.navigate(to: AppRouter.Destination.diaryCalendarView(date: nil), style: AppRouter.NavigationStyle.push) },
-                        onTapStart: { router.navigate(to: AppRouter.Destination.successDiaryEditor, style: AppRouter.NavigationStyle.push) }
+                        onTapStart: { router.navigate(to: AppRouter.Destination.successDiaryEditor(), style: AppRouter.NavigationStyle.push) }
                     )
 
                     HomeTodayVirtueSectionView(
@@ -39,10 +39,15 @@ struct Home: View {
                     )
 
                     HomeVisionBoardPreviewView(
-                        items: viewModel.visionPreviewItems,
+                        cells: viewModel.visionBoardGridCells,
                         onViewAll: { router.navigate(to: AppRouter.Destination.visionBoardMain, style: AppRouter.NavigationStyle.push) },
-                        onOpenBoard: { router.navigate(to: AppRouter.Destination.visionBoardMain, style: AppRouter.NavigationStyle.push) },
-                        onAddVision: { router.navigate(to: AppRouter.Destination.visionBoardEditor(id: nil), style: AppRouter.NavigationStyle.push) }
+                        onTapCell: { cell in
+                            if let id = cell.visionItemId {
+                                router.navigate(to: AppRouter.Destination.visionBoardEditor(id: id), style: AppRouter.NavigationStyle.push)
+                            } else {
+                                router.navigate(to: AppRouter.Destination.visionBoardEditor(id: nil), style: AppRouter.NavigationStyle.push)
+                            }
+                        }
                     )
                 }
                 .padding(.horizontal, AppTheme.spacing.screenHorizontal)
@@ -57,6 +62,17 @@ struct Home: View {
         }
         .background(AppTheme.colors.background)
         .navigationBarBackButtonHidden(true)
+        .onAppear {
+            viewModel.requestSyncFromAPI {
+                viewModel.objectWillChange.send()
+                print("[HomeView] 首页数据已刷新（含愿景板预览）")
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .appShouldSyncData)) { _ in
+            viewModel.requestSyncFromAPI {
+                viewModel.objectWillChange.send()
+            }
+        }
     }
 }
 
@@ -93,8 +109,15 @@ private struct HomeHeroSectionView: View {
 }
 
 private struct WelcomeCard: View {
+    @ObservedObject private var authService = AuthService.shared
+
     let todayText: String
     let heroMessage: String
+
+    private var welcomeText: String {
+        let name = authService.currentPhone
+        return name.isEmpty ? "欢迎回来" : "\(name)欢迎回来"
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: AppTheme.spacing.md) {
@@ -104,10 +127,10 @@ private struct WelcomeCard: View {
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 88, height: 88)
                 .clipShape(RoundedRectangle(cornerRadius: AppTheme.radius.standard, style: .continuous))
-                .accessibilityLabel(Text("钱钱"))
+                .accessibilityLabel(Text("Poppy"))
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("欢迎回来")
+                Text(welcomeText)
                     .font(.system(size: 20, weight: .bold))
                     .foregroundColor(AppTheme.colors.onSurface)
 
@@ -129,7 +152,7 @@ private struct WelcomeCard: View {
         .background(AppTheme.colors.primary.opacity(0.12))
         .cornerRadius(AppTheme.radius.standard)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("欢迎回来，\(todayText)，\(heroMessage)"))
+        .accessibilityLabel(Text("\(welcomeText)，\(todayText)，\(heroMessage)"))
     }
 }
 
@@ -243,6 +266,7 @@ private struct HomeTodayVirtueSectionView: View {
 
             VirtueCard(
                 virtue: virtue,
+                presentation: VirtueCard.Presentation.homeHero,
                 isExpanded: isExpanded,
                 onToggle: onToggleExpanded
             )
@@ -389,10 +413,9 @@ private struct HomeHighlightRowView: View {
 }
 
 private struct HomeVisionBoardPreviewView: View {
-    let items: [VisionItemData]
+    let cells: [HomeVisionBoardGridCell]
     let onViewAll: () -> Void
-    let onOpenBoard: () -> Void
-    let onAddVision: () -> Void
+    let onTapCell: (HomeVisionBoardGridCell) -> Void
 
     var body: some View {
         VStack(spacing: 12) {
@@ -404,21 +427,20 @@ private struct HomeVisionBoardPreviewView: View {
             )
 
             LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(items, id: \.id) { item in
+                ForEach(cells) { cell in
                     VisionPreviewTile(
-                        title: item.title,
-                        imageUrl: item.imageUrl,
-                        onTap: onOpenBoard
+                        title: cell.title,
+                        imageUrl: cell.imageUrl,
+                        isPlaceholder: cell.visionItemId == nil,
+                        onTap: { onTapCell(cell) }
                     )
                 }
-
-                AddVisionTile(onTap: onAddVision)
             }
         }
     }
 
     private var columns: [GridItem] {
-        [GridItem(.flexible(), spacing: AppTheme.spacing.sm), GridItem(.flexible(), spacing: AppTheme.spacing.sm)]
+        [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
     }
 }
 
@@ -463,67 +485,55 @@ private struct HeaderRow: View {
 private struct VisionPreviewTile: View {
     let title: String
     let imageUrl: String
+    var isPlaceholder: Bool = false
     let onTap: () -> Void
+
+    private var resolvedImageSource: String {
+        let t = imageUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty || isPlaceholder {
+            // 首页预览现在也优先使用后端返回的图片，空时使用默认
+            switch title {
+            case "成为更好的自己", "成为更好的自己 ", "坚持阅读与记录", "坚持阅读与记录 ":
+                return "asset:vision_work"
+            case "规律运动", "规律运动 ":
+                return "asset:vision_health"
+            case "珍惜身边人", "珍惜身边人 ":
+                return "asset:vision_relationship"
+            default:
+                return "asset:vision_growth"
+            }
+        }
+        return t
+    }
 
     var body: some View {
         Button(action: onTap) {
             AppCard {
-                ZStack(alignment: .bottomLeading) {
-                    VisionImage.card(urlOrAsset: imageUrl, aspectRatio: 1.0)
+                VStack(spacing: 0) {
+                    // 从后端请求来的图片优先（http URL），回退到本地 asset
+                    VisionImage.card(urlOrAsset: resolvedImageSource, aspectRatio: 1.0)
                         .contentMode(RemoteImageContentMode.fill)
+                        .placeholder(AppTheme.colors.muted)
 
-                    LinearGradient(
-                        colors: [
-                            Color.black.opacity(0.0),
-                            Color.black.opacity(0.40)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-
+                    // 标题区域（纯白色背景，无渐变叠加）
                     Text(title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(AppTheme.colors.onSurface)
                         .lineLimit(2)
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 12)
+                        .frame(maxWidth: .infinity)
                 }
-                .clipped()
             }
             .background(AppTheme.colors.surface)
             .borderColor(AppTheme.colors.border)
             .cornerRadius(AppTheme.radius.standard)
             .shadow(color: AppTheme.shadow.soft.color, radius: AppTheme.shadow.soft.radius, x: 0, y: 2)
+            .aspectRatio(1, contentMode: .fit)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(Text("愿景项目"))
-    }
-}
-
-private struct AddVisionTile: View {
-    let onTap: () -> Void
-
-    var body: some View {
-        Button(action: onTap) {
-            VStack(spacing: 8) {
-                SafeIcon("Plus", size: 24, color: AppTheme.colors.onMuted)
-                Text("添加愿景")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(AppTheme.colors.onMuted)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-            }
-            .frame(maxWidth: .infinity)
-            .aspectRatio(1.0, contentMode: .fit)
-        }
-        .buttonStyle(HomePressableCardButtonStyle(
-            background: AppTheme.colors.surface,
-            borderColor: AppTheme.colors.border,
-            cornerRadius: AppTheme.radius.large,
-            normalShadow: AppTheme.shadow.soft,
-            pressedShadow: AppTheme.shadow.card
-        ))
-        .accessibilityLabel(Text("添加愿景"))
+        .accessibilityLabel(Text(title))
     }
 }
 

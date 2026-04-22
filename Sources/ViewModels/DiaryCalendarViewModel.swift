@@ -5,6 +5,8 @@ import Foundation
 final class DiaryCalendarViewModel: ObservableObject {
     @Published var currentMonthDate: Date
     @Published var selectedDateString: String
+    /// 当日历点击某日期时，直接展示接口返回结果，不做缓存
+    @Published var entriesForSelectedDate: [SuccessDiaryEntryData] = []
 
     private let diaryService: DiaryService
     private let calendar: Calendar
@@ -13,7 +15,7 @@ final class DiaryCalendarViewModel: ObservableObject {
         self.diaryService = diaryService
         self.calendar = calendar
 
-        let resolvedSelected = initialDate?.isEmpty == false ? (initialDate ?? "") : "2026-03-04"
+        let resolvedSelected = initialDate?.isEmpty == false ? (initialDate ?? "") : Self.currentDateString()
         self.selectedDateString = resolvedSelected
 
         let selectedDate = Self.parseDateString(resolvedSelected) ?? Date()
@@ -39,7 +41,12 @@ final class DiaryCalendarViewModel: ObservableObject {
     }
 
     var selectedEntries: [SuccessDiaryEntryData] {
-        allEntries.filter { $0.date == selectedDateString }.sorted { $0.id < $1.id }
+        entriesForSelectedDate.sorted { $0.id < $1.id }
+    }
+
+    /// 选中的日期是否为未来（超过今天），未来日期不允许补记
+    var isSelectedDateInFuture: Bool {
+        selectedDateString > Self.currentDateString()
     }
 
     var selectedCategoryCounts: [(category: DiaryCategoryData, count: Int)] {
@@ -71,16 +78,18 @@ final class DiaryCalendarViewModel: ObservableObject {
 
         let monthPrefix = String(format: "%04d-%02d", year, month)
         let countsByDate = recordCountsByDatePrefix(monthPrefix: monthPrefix)
+        let apiRecordedDates = diaryService.recordedDatesForMonth(year: year, month: month)
 
         for day in dayRange {
             let dateStr = String(format: "%04d-%02d-%02d", year, month, day)
             let count = countsByDate[dateStr] ?? 0
+            let hasRecords = count > 0 || apiRecordedDates.contains(dateStr)
             cells.append(
                 DiaryCalendarViewCalendarCell(
                     day: day,
                     dateString: dateStr,
-                    hasRecords: count > 0,
-                    recordCount: count
+                    hasRecords: hasRecords,
+                    recordCount: hasRecords ? max(count, 1) : 0
                 )
             )
         }
@@ -95,28 +104,86 @@ final class DiaryCalendarViewModel: ObservableObject {
     func selectDate(_ dateString: String) {
         guard !dateString.isEmpty else { return }
         selectedDateString = dateString
+        entriesForSelectedDate = []
+        Task {
+            let items = await fetchEntries(for: dateString)
+            self.entriesForSelectedDate = items
+        }
     }
 
     func goToPreviousMonth() {
         guard let newDate = calendar.date(byAdding: .month, value: -1, to: currentMonthDate) else { return }
         let comps = calendar.dateComponents([.year, .month], from: newDate)
         currentMonthDate = calendar.date(from: comps) ?? newDate
+        let year = comps.year ?? 0
+        let month = comps.month ?? 1
+        diaryService.loadCalendarForMonth(year: year, month: month) { [weak self] in
+            Task { @MainActor in
+                self?.objectWillChange.send()
+            }
+        }
     }
 
     func goToNextMonth() {
         guard let newDate = calendar.date(byAdding: .month, value: 1, to: currentMonthDate) else { return }
         let comps = calendar.dateComponents([.year, .month], from: newDate)
         currentMonthDate = calendar.date(from: comps) ?? newDate
+        let year = comps.year ?? 0
+        let month = comps.month ?? 1
+        diaryService.loadCalendarForMonth(year: year, month: month) { [weak self] in
+            Task { @MainActor in
+                self?.objectWillChange.send()
+            }
+        }
     }
 
     func categoryLabel(for category: DiaryCategoryData) -> String {
         diaryService.getCategoryLabel(category)
     }
 
+    func loadFromAPI(completion: @escaping () -> Void) {
+        let comps = calendar.dateComponents([.year, .month], from: currentMonthDate)
+        let year = comps.year ?? 0
+        let month = comps.month ?? 1
+        let group = DispatchGroup()
+        group.enter()
+        diaryService.loadFromAPI { group.leave() }
+        group.enter()
+        diaryService.loadCalendarForMonth(year: year, month: month) { group.leave() }
+        group.notify(queue: .main) { [weak self] in
+            guard let self else { completion(); return }
+            Task {
+                let items = await self.fetchEntries(for: self.selectedDateString)
+                self.entriesForSelectedDate = items
+                completion()
+            }
+        }
+    }
+
+    /// 补记后或缓存更新时重新拉取当日记录
+    func refreshEntriesForSelectedDate() {
+        Task {
+            let items = await fetchEntries(for: selectedDateString)
+            self.entriesForSelectedDate = items
+        }
+    }
+
     func deleteEntry(id: String) {
         guard !id.isEmpty else { return }
-        diaryService.deleteEntry(id: id)
-        objectWillChange.send()
+        diaryService.deleteEntry(id: id) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshEntriesForSelectedDate()
+            }
+        }
+    }
+
+    /// 将 callback 版 fetchEntriesForDate 转为 async，保证在 @MainActor 上安全调用
+    private func fetchEntries(for date: String) async -> [SuccessDiaryEntryData] {
+        await withCheckedContinuation { continuation in
+            diaryService.fetchEntriesForDate(date) { items in
+                continuation.resume(returning: items)
+            }
+        }
     }
 
     private var allEntries: [SuccessDiaryEntryData] {
@@ -139,6 +206,13 @@ final class DiaryCalendarViewModel: ObservableObject {
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.date(from: value)
+    }
+
+    private static func currentDateString(date: Date = Date(), calendar: Calendar = .current) -> String {
+        let year = calendar.component(.year, from: date)
+        let month = calendar.component(.month, from: date)
+        let day = calendar.component(.day, from: date)
+        return String(format: "%04d-%02d-%02d", year, month, day)
     }
 }
 

@@ -6,7 +6,7 @@ struct OnboardingQianqian: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MobileHeader(title: "钱钱", showBack: true)
+            MobileHeader(title: "Poppy", showBack: true)
 
             ScrollView {
                 VStack(spacing: 32) {

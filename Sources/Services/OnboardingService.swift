@@ -10,19 +10,19 @@ final class OnboardingService {
         let steps: [DialogStepData] = [
             DialogStepData(
                 id: 1,
-                characterName: "钱钱",
-                text: "嗨，我叫钱钱。这是一本属于你的本子——成功日记本。",
+                characterName: "Poppy",
+                text: "嗨，我叫 Poppy。这是一本属于你的本子——成功日记本。",
                 avatarUrl: "https://spark-builder.s3.cn-north-1.amazonaws.com.cn/image/2026/3/4/04b76727-47fe-49ec-a42b-f66066ece7b5.png"
             ),
             DialogStepData(
                 id: 2,
-                characterName: "钱钱",
+                characterName: "Poppy",
                 text: "从今天起，每天记下至少5件你做成的事。任何小事都算：早起、微笑、专注工作/学习半小时……",
                 avatarUrl: "https://spark-builder.s3.cn-north-1.amazonaws.com.cn/image/2026/3/4/c1693069-d7a1-42a7-8584-b5dcd4d533ec.png"
             ),
             DialogStepData(
                 id: 3,
-                characterName: "钱钱",
+                characterName: "Poppy",
                 text: "看！是汉内坎普夫妇送来的甜甜圈！点击它看看脑海里会浮现什么？",
                 avatarUrl: "https://spark-builder.s3.cn-north-1.amazonaws.com.cn/image/2026/3/4/43504b2d-695e-4d30-9f94-d13ab457c6c5.png"
             )
@@ -83,14 +83,14 @@ final class OnboardingService {
     private func defaultStep(id: Int) -> DialogStepData {
         DialogStepData(
             id: id,
-            characterName: "钱钱",
+            characterName: "Poppy",
             text: "我们从一个小目标开始：记录今天的一件小成功。",
             avatarUrl: "https://spark-builder.s3.cn-north-1.amazonaws.com.cn/image/2026/3/4/04b76727-47fe-49ec-a42b-f66066ece7b5.png"
         )
     }
 
     private func normalizeStep(_ step: DialogStepData) -> DialogStepData {
-        let normalizedCharacter = step.characterName.isEmpty ? "钱钱" : step.characterName
+        let normalizedCharacter = step.characterName.isEmpty ? "Poppy" : step.characterName
         let normalizedText = step.text.isEmpty ? "我们从一个小目标开始：记录今天的一件小成功。" : step.text
         let normalizedAvatar = step.avatarUrl.isEmpty ? defaultStep(id: step.id).avatarUrl : step.avatarUrl
         return DialogStepData(id: step.id, characterName: normalizedCharacter, text: normalizedText, avatarUrl: normalizedAvatar)

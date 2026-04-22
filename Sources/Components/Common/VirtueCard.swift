@@ -8,7 +8,14 @@ struct VirtueCard: View {
         let color: String
     }
 
+    /// 标准页可折叠；首页直接展示「名称 · 行动准则」与编号列表。
+    enum Presentation {
+        case standard
+        case homeHero
+    }
+
     let virtue: Virtue
+    var presentation: Presentation = .standard
     var isExpanded: Bool = false
     var onToggle: ((Bool) -> Void)? = nil
 
@@ -17,14 +24,25 @@ struct VirtueCard: View {
     var body: some View {
         AppCard {
             VStack(alignment: .leading, spacing: 0) {
-                VirtueHeader(virtue: virtue, accentColor: accentColor)
+                switch presentation {
+                case .standard:
+                    VirtueHeader(virtue: virtue, accentColor: accentColor)
 
-                VirtueContent(
-                    virtue: virtue,
-                    accentColor: accentColor,
-                    expanded: expanded,
-                    onToggle: toggleExpand
-                )
+                    VirtueContent(
+                        virtue: virtue,
+                        accentColor: accentColor,
+                        expanded: expanded,
+                        onToggle: toggleExpand
+                    )
+                case .homeHero:
+                    PrinciplesList(
+                        title: "\(virtue.name) · 行动准则",
+                        principles: virtue.principles,
+                        accentColor: accentColor,
+                        showsTopDivider: false
+                    )
+                    .padding(20)
+                }
             }
         }
         .background(AppTheme.colors.surface)
@@ -32,7 +50,11 @@ struct VirtueCard: View {
         .cornerRadius(AppTheme.radius.standard)
         .shadow(color: AppTheme.shadow.soft.color, radius: AppTheme.shadow.soft.radius)
         .overlay(TopAccentBar(color: accentColor), alignment: .top)
-        .onAppear { expanded = isExpanded }
+        .onAppear {
+            if presentation == .standard {
+                expanded = isExpanded
+            }
+        }
         .animation(.easeInOut(duration: 0.3), value: expanded)
     }
 
@@ -106,11 +128,14 @@ private struct PrinciplesList: View {
     let title: String
     let principles: [String]
     let accentColor: Color
+    var showsTopDivider: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Divider()
-                .overlay(AppTheme.colors.border)
+            if showsTopDivider {
+                Divider()
+                    .overlay(AppTheme.colors.border)
+            }
 
             Text(title)
                 .font(.system(size: 14, weight: .semibold))

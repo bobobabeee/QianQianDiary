@@ -34,6 +34,12 @@ struct DiaryCalendarView: View {
             MobileBottomNav(activeDestination: AppRouter.Destination.diaryCalendarView(date: nil))
         }
         .navigationBarBackButtonHidden(true)
+        .onAppear {
+            viewModel.loadFromAPI { viewModel.objectWillChange.send() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .diaryCacheDidUpdate)) { _ in
+            viewModel.refreshEntriesForSelectedDate()
+        }
     }
 }
 
@@ -249,10 +255,10 @@ private struct DiaryCalendarViewDiaryListSectionView: View {
                 EmptyState(
                     illustration: EmptyState.Illustration.calendarEmpty,
                     customImageUrl: nil,
-                    title: "暂无记录",
-                    message: "这一天还没有记录成功事件。点击下方按钮添加第一条记录吧！",
-                    actionText: "补记日记",
-                    actionDestination: AppRouter.Destination.successDiaryEditor,
+                    title: viewModel.isSelectedDateInFuture ? "未来日期" : "暂无记录",
+                    message: viewModel.isSelectedDateInFuture ? "该日期为未来日期，无法补记。" : "这一天还没有记录成功事件。点击下方按钮添加第一条记录吧！",
+                    actionText: viewModel.isSelectedDateInFuture ? nil : "补记日记",
+                    actionDestination: viewModel.isSelectedDateInFuture ? nil : AppRouter.Destination.successDiaryEditor(prefillDate: viewModel.selectedDateString),
                     onAction: nil
                 )
             } else {
@@ -265,7 +271,7 @@ private struct DiaryCalendarViewDiaryListSectionView: View {
                         DiaryCalendarViewDiaryListCardView(
                             entry: entry,
                             categoryLabel: viewModel.categoryLabel(for: entry.category),
-                            onEdit: { router.navigate(to: AppRouter.Destination.successDiaryEditor, style: AppRouter.NavigationStyle.push) },
+                            onEdit: { router.navigate(to: AppRouter.Destination.successDiaryEditor(entry: entry), style: AppRouter.NavigationStyle.push) },
                             onDelete: { viewModel.deleteEntry(id: entry.id) }
                         )
                     }

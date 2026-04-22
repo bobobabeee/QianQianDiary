@@ -15,6 +15,10 @@ final class SuccessDiaryEntryData: Codable, Identifiable, Hashable {
     var category: DiaryCategoryData
     var moodIcon: String
 
+    private enum CodingKeys: String, CodingKey {
+        case id, date, content, category, moodIcon
+    }
+
     init(
         id: String,
         date: String,
@@ -27,6 +31,19 @@ final class SuccessDiaryEntryData: Codable, Identifiable, Hashable {
         self.content = content
         self.category = category
         self.moodIcon = moodIcon
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let intId = try? container.decode(Int.self, forKey: .id) {
+            self.id = String(intId)
+        } else {
+            self.id = try container.decode(String.self, forKey: .id)
+        }
+        self.date = try container.decode(String.self, forKey: .date)
+        self.content = try container.decode(String.self, forKey: .content)
+        self.category = (try? container.decode(DiaryCategoryData.self, forKey: .category)) ?? .daily
+        self.moodIcon = (try? container.decode(String.self, forKey: .moodIcon)) ?? "Sun"
     }
 
     static func == (lhs: SuccessDiaryEntryData, rhs: SuccessDiaryEntryData) -> Bool {
